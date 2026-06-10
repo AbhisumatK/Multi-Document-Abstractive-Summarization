@@ -1,0 +1,11 @@
+structure.txt
+requirements.txt
+/data
+/data/train.csv
+/data/train.csv.zip
+/venv
+__pycache__/
+*.py[cod]
+Agent_2_Document_Agregation_Agent/.vscode/
+Agent_1_Packing_Agent/.vscode/
+.DS_Store
