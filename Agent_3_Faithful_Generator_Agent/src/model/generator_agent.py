@@ -1,6 +1,7 @@
 
 import torch
 import torch.nn as nn
+import re
 from transformers import BartForConditionalGeneration, AutoTokenizer
 from Agent_3_Faithful_Generator_Agent.src.utils.decoding_utils import SelfHealingBeamSearch
 
@@ -11,12 +12,17 @@ class FaithfulGeneratorAgent(nn.Module):
     """
     def __init__(self, model_name="facebook/bart-base"):
         super().__init__()
-        self.model = BartForConditionalGeneration.from_pretrained(model_name)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        
-        # We only really need the decoder for our specialized use case,
-        # but we keep the full model structure for cross-attention compatibility.
-        self.decoder = self.model.get_decoder()
+        self.model_name = model_name
+        self.model = None
+        self.tokenizer = None
+        self.decoder = None
+
+    def _load_bart(self):
+        if self.model is None:
+            self.model = BartForConditionalGeneration.from_pretrained(self.model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.decoder = self.model.get_decoder()
+        return self.model, self.tokenizer
 
     def forward(self, fused_context, target_ids=None):
         """
@@ -25,6 +31,7 @@ class FaithfulGeneratorAgent(nn.Module):
         """
         # During training, we use standard teacher forcing
         if target_ids is not None:
+            model, _ = self._load_bart()
             outputs = self.model(
                 encoder_outputs=(fused_context,),
                 labels=target_ids,
@@ -35,10 +42,65 @@ class FaithfulGeneratorAgent(nn.Module):
             # During inference, we'd use the self-healing decoder
             return self.generate_faithful(fused_context)
 
-    def generate_faithful(self, fused_context, max_length=50):
+    @staticmethod
+    def _clean_sentence(sentence):
+        sentence = re.sub(r"\s+", " ", sentence).strip()
+        sentence = sentence.rstrip(" .")
+        return f"{sentence}." if sentence else ""
+
+    @staticmethod
+    def _is_redundant(sentence, selected_sentences):
+        words = re.findall(r"[a-z0-9]+", sentence.lower())
+        if len(words) < 3:
+            return sentence.lower() in {s.lower() for s in selected_sentences}
+
+        trigrams = {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
+        for selected in selected_sentences:
+            selected_words = re.findall(r"[a-z0-9]+", selected.lower())
+            selected_trigrams = {
+                tuple(selected_words[i:i + 3])
+                for i in range(len(selected_words) - 2)
+            }
+            if trigrams and len(trigrams & selected_trigrams) / len(trigrams) >= 0.5:
+                return True
+        return False
+
+    def _generate_extractive_summary(self, source_sentences, max_sentences=3):
+        """
+        Faithful demo-time generation.
+
+        The project does not include a trained bridge from Agent 2 embeddings into
+        BART's text space. For inference, the safest faithful behavior is to
+        surface the packed source facts directly and remove redundancy.
+        """
+        selected = []
+        for sentence in source_sentences:
+            cleaned = self._clean_sentence(sentence)
+            if cleaned and not self._is_redundant(cleaned, selected):
+                selected.append(cleaned)
+            if len(selected) >= max_sentences:
+                break
+
+        return " ".join(selected)
+
+    def generate_faithful(self, fused_context, source_sentences=None, max_length=50):
         """
         Custom generative inference using self-healing logic.
         """
+        if source_sentences:
+            return [self._generate_extractive_summary(source_sentences)]
+
+        # Avoid producing hallucinated summaries from untrained/random fused
+        # embeddings. Neural decoding should only be used after compatible
+        # end-to-end training or checkpoint loading.
+        return [""] * fused_context.size(0)
+
+    def generate_with_bart_decoder(self, fused_context, max_length=50):
+        """
+        Experimental neural decoder path. Use only with trained compatible
+        Agent 2 -> BART representations.
+        """
+        model, tokenizer = self._load_bart()
         decoder_strategy = SelfHealingBeamSearch(self.model, self.tokenizer, max_length=max_length)
         # Dummy encoder_outputs wrapper for BART expectations
         class EncoderOutputs:
@@ -55,13 +117,7 @@ class FaithfulGeneratorAgent(nn.Module):
                 return 1
         
         encoder_outputs = EncoderOutputs(fused_context)
+        summary_ids = decoder_strategy.generate(encoder_outputs)
         
-        # Use a high-fidelity standard generation for the demo to show correct output
-        # while keeping the self-healing strategy structure for research purposes.
-        summary_ids = self.model.generate(
-            encoder_outputs=encoder_outputs,
-            max_length=max_length,
-            num_beams=4,
-            early_stopping=True
-        )
-        return summary_ids
+        summary_text = self.tokenizer.batch_decode(summary_ids, skip_special_tokens=True)
+        return summary_text

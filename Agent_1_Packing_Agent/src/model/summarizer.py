@@ -3,9 +3,9 @@ import torch.nn as nn
 from transformers import BertModel
 
 class BertSum(nn.Module):
-    def __init__(self, model_name='bert-base-uncased'):
+    def __init__(self, model_name='bert-base-uncased', local_files_only=False):
         super(BertSum, self).__init__()
-        self.bert = BertModel.from_pretrained(model_name)
+        self.bert = BertModel.from_pretrained(model_name, local_files_only=local_files_only)
         self.summarization_layer = nn.Sequential(
             nn.Linear(self.bert.config.hidden_size, 1),
             nn.Sigmoid()
