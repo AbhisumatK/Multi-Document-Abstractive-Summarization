@@ -1,8 +1,8 @@
 
 import torch
 import torch.nn as nn
-from src.utils.embeddings import PDRoPE, apply_pd_rope
-from src.utils.entity_utils import get_entity_alignment_matrix
+from Agent_2_Document_Agregation_Agent.src.utils.embeddings import PDRoPE, apply_pd_rope
+from Agent_2_Document_Agregation_Agent.src.utils.entity_utils import get_entity_alignment_matrix
 
 class EntityAlignedMultiheadAttention(nn.Module):
     def __init__(self, d_model, n_heads, dropout=0.1):

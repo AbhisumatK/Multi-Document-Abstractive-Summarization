@@ -1,6 +1,6 @@
 
 import torch
-from src.model.aggregation_agent import CrossDocumentAggregationAgent
+from Agent_2_Document_Agregation_Agent.src.model.aggregation_agent import CrossDocumentAggregationAgent
 
 def test_aggregation_agent():
     print("Testing Aggregation Agent...")

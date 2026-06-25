@@ -1,7 +1,7 @@
 
 import torch
-from src.utils.embeddings import PDRoPE, apply_pd_rope
-from src.utils.entity_utils import extract_entities, get_entity_alignment_matrix
+from Agent_2_Document_Agregation_Agent.src.utils.embeddings import PDRoPE, apply_pd_rope
+from Agent_2_Document_Agregation_Agent.src.utils.entity_utils import extract_entities, get_entity_alignment_matrix
 
 def test_pd_rope():
     print("Testing PD-RoPE...")
