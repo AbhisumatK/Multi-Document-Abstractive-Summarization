@@ -10,6 +10,7 @@ class BertSum(nn.Module):
             nn.Linear(self.bert.config.hidden_size, 1),
             nn.Sigmoid()
         )
+        self.value_head = nn.Linear(self.bert.config.hidden_size, 1)
 
     def forward(self, input_ids, attention_mask, cls_positions):
         """
@@ -26,3 +27,22 @@ class BertSum(nn.Module):
 
         salience_scores = self.summarization_layer(cls_embeddings).squeeze(-1)
         return salience_scores
+
+    def actor_critic(self, input_ids, attention_mask, cls_positions):
+        """
+        Actor-Critic view of the packing agent.
+
+        Actor: per-sentence salience probabilities.
+        Critic: scalar value estimate for the current document state.
+        """
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        hidden_states = outputs.last_hidden_state
+
+        cls_positions_clamped = cls_positions.clamp(min=0)
+        batch_indices = torch.arange(hidden_states.size(0), device=hidden_states.device).unsqueeze(1)
+        cls_embeddings = hidden_states[batch_indices, cls_positions_clamped]
+
+        salience_scores = self.summarization_layer(cls_embeddings).squeeze(-1)
+        state_embedding = cls_embeddings.mean(dim=1)
+        state_values = self.value_head(state_embedding).squeeze(-1)
+        return salience_scores, state_values

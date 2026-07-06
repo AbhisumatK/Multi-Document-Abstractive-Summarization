@@ -27,10 +27,6 @@ class SelfHealingBeamSearch:
         start_token_id = self.model.config.decoder_start_token_id
         input_ids = torch.full((batch_size, 1), start_token_id, dtype=torch.long, device=device)
         
-        # Simple beam search with self-healing placeholder
-        # In a real RL setup, we'd use multiple beams and score them.
-        # Here we demonstrate the loop and the potential for prefix rejection.
-        
         for _ in range(self.max_length):
             outputs = self.model(
                 encoder_outputs=encoder_outputs,
@@ -48,12 +44,43 @@ class SelfHealingBeamSearch:
             # 1. Decode each top candidate.
             # 2. Check if the partial summary contradicts the entities in the fused context.
             # 3. Reject candidates that cause hallucinations.
-            
-            # For now, we take the best one but keep the hook for reward-based selection.
-            next_token = top_ids[:, 0].unsqueeze(-1)
+
+            if self.reward_fn is not None and reference is not None:
+                next_token = self._select_rewarded_token(input_ids, top_ids, top_probs, reference)
+            else:
+                next_token = top_ids[:, 0].unsqueeze(-1)
+
             input_ids = torch.cat([input_ids, next_token], dim=-1)
             
             if (next_token == self.tokenizer.eos_token_id).all():
                 break
                 
         return input_ids
+
+    def _select_rewarded_token(self, input_ids, top_ids, top_probs, reference):
+        """
+        Chooses the next token whose decoded prefix receives the best reward.
+        This is the self-healing step: low-reward prefixes are rejected early.
+        """
+        selected_tokens = []
+        for batch_idx in range(input_ids.size(0)):
+            best_score = None
+            best_token = top_ids[batch_idx, 0]
+
+            for beam_idx in range(top_ids.size(1)):
+                candidate_ids = torch.cat([
+                    input_ids[batch_idx],
+                    top_ids[batch_idx, beam_idx].view(1),
+                ])
+                candidate_text = self.tokenizer.decode(candidate_ids, skip_special_tokens=True)
+                model_score = top_probs[batch_idx, beam_idx].log().item()
+                reward_score = self.reward_fn.compute_reward(candidate_text, reference)
+                total_score = model_score + reward_score
+
+                if best_score is None or total_score > best_score:
+                    best_score = total_score
+                    best_token = top_ids[batch_idx, beam_idx]
+
+            selected_tokens.append(best_token)
+
+        return torch.stack(selected_tokens).unsqueeze(-1)
