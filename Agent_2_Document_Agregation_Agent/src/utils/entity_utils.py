@@ -2,15 +2,14 @@
 import spacy
 import torch
 import numpy as np
+import re
 
 # Load spaCy model
 try:
     nlp = spacy.load("en_core_web_sm")
-except OSError:
-    # Fallback if not downloaded (though we tried earlier)
-    import os
-    os.system("python -m spacy download en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+except (OSError, ImportError):
+    # Fallback if not downloaded or not available
+    nlp = None
 
 def extract_entities(sentences):
     """
@@ -20,8 +19,12 @@ def extract_entities(sentences):
     """
     all_sentence_entities = []
     for sent in sentences:
-        doc = nlp(sent)
-        entities = {ent.text.lower() for ent in doc.ents}
+        if nlp is not None:
+            doc = nlp(sent)
+            entities = {ent.text.lower() for ent in doc.ents}
+        else:
+            # Fallback: extract capitalized words as potential entities
+            entities = {word.lower() for word in re.findall(r'\b[A-Z][a-zA-Z]+\b', sent)}
         all_sentence_entities.append(entities)
     return all_sentence_entities
 

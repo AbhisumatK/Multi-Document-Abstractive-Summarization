@@ -1,4 +1,5 @@
 
+import math
 import torch
 import torch.nn as nn
 from Agent_2_Document_Agregation_Agent.src.utils.embeddings import PDRoPE, apply_pd_rope
@@ -49,8 +50,6 @@ class EntityAlignedMultiheadAttention(nn.Module):
         out = torch.matmul(attn_probs, v)
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
         return self.out_proj(out)
-
-import math
 
 class CrossDocumentAggregationAgent(nn.Module):
     """

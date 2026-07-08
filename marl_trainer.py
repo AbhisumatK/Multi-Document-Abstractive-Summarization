@@ -70,7 +70,7 @@ class MARLMdsTrainer:
 
         self.agent1 = BertSum(model_name=model_name, local_files_only=local_files_only).to(self.device)
         self.agent2 = CrossDocumentAggregationAgent(d_model=768).to(self.device)
-        self.agent3 = FaithfulGeneratorAgent(local_files_only=local_files_only).to(self.device)
+        self.agent3 = FaithfulGeneratorAgent(local_files_only=local_files_only, bert_dim=768).to(self.device)
         self.reward_fn = SummarizationReward()
 
         self.optimizer = optim.Adam(
@@ -133,12 +133,22 @@ class MARLMdsTrainer:
         entity_bias = get_entity_alignment_matrix(extract_entities(selected_sentences), device=self.device).unsqueeze(0)
         fused_context = self.agent2(sentence_embeddings, entity_bias=entity_bias)
 
-        summary = self.agent3.generate_faithful(
-            fused_context,
-            source_sentences=selected_sentences,
-            reference=reference_summary,
-            mode="abstractive"
-        )[0]
+        try:
+            summary = self.agent3.generate_faithful(
+                fused_context,
+                source_sentences=selected_sentences,
+                reference=reference_summary,
+                mode="abstractive"
+            )[0]
+        except Exception as e:
+            print(f"Abstractive generation failed: {e}, falling back to extractive")
+            summary = self.agent3.generate_faithful(
+                fused_context,
+                source_sentences=selected_sentences,
+                reference=reference_summary,
+                mode="extractive"
+            )[0]
+        
         reward_value = self.reward_fn.compute_reward(summary, reference_summary, source_text=" ".join(documents))
         rewards = torch.tensor([reward_value], device=self.device)
 
