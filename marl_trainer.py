@@ -70,11 +70,11 @@ class MARLMdsTrainer:
 
         self.agent1 = BertSum(model_name=model_name, local_files_only=local_files_only).to(self.device)
         self.agent2 = CrossDocumentAggregationAgent(d_model=768).to(self.device)
-        self.agent3 = FaithfulGeneratorAgent().to(self.device)
+        self.agent3 = FaithfulGeneratorAgent(local_files_only=local_files_only).to(self.device)
         self.reward_fn = SummarizationReward()
 
         self.optimizer = optim.Adam(
-            list(self.agent1.parameters()) + list(self.agent2.parameters()),
+            list(self.agent1.parameters()) + list(self.agent2.parameters()) + list(self.agent3.parameters()),
             lr=learning_rate,
         )
 
@@ -133,12 +133,34 @@ class MARLMdsTrainer:
         entity_bias = get_entity_alignment_matrix(extract_entities(selected_sentences), device=self.device).unsqueeze(0)
         fused_context = self.agent2(sentence_embeddings, entity_bias=entity_bias)
 
-        summary = self.agent3.generate_faithful(fused_context, source_sentences=selected_sentences)[0]
+        summary = self.agent3.generate_faithful(
+            fused_context,
+            source_sentences=selected_sentences,
+            reference=reference_summary,
+            mode="abstractive"
+        )[0]
         reward_value = self.reward_fn.compute_reward(summary, reference_summary, source_text=" ".join(documents))
         rewards = torch.tensor([reward_value], device=self.device)
 
-        loss, metrics = actor_critic_loss(log_probs, state_values, rewards, entropy)
-        return loss, {
+        # Tokenize reference_summary for Agent 3 teacher forced loss
+        target_tokens = self.agent3.tokenizer(
+            reference_summary,
+            padding=True,
+            truncation=True,
+            max_length=64,
+            return_tensors="pt"
+        ).to(self.device)
+        target_ids = target_tokens["input_ids"]
+
+        loss_a3, logits_a3 = self.agent3(fused_context, target_ids=target_ids)
+
+        rl_loss, metrics = actor_critic_loss(log_probs, state_values, rewards, entropy)
+        total_loss = rl_loss + loss_a3
+
+        metrics["loss_a3"] = loss_a3.item()
+        metrics["rl_loss"] = rl_loss.item()
+
+        return total_loss, {
             **metrics,
             "summary": summary,
             "selected_sentences": selected_sentences,
@@ -147,6 +169,7 @@ class MARLMdsTrainer:
     def train_step(self, documents, reference_summary):
         self.agent1.train()
         self.agent2.train()
+        self.agent3.train()
 
         self.optimizer.zero_grad()
         loss, metrics = self.run_episode(documents, reference_summary)
@@ -161,6 +184,7 @@ class MARLMdsTrainer:
             {
                 "agent1": self.agent1.state_dict(),
                 "agent2": self.agent2.state_dict(),
+                "agent3": self.agent3.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
             },
             checkpoint_path,

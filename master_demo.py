@@ -131,7 +131,7 @@ def run_marl_mds_pipeline(documents):
     model_a3 = FaithfulGeneratorAgent().to(device)
     model_a3.eval()
     
-    summary = model_a3.generate_faithful(fused_context, source_sentences=selected_sentences)
+    summary = model_a3.generate_faithful(fused_context, source_sentences=selected_sentences, mode="abstractive")
     print("\n--- Final Summary ---")
     print(summary[0])
     

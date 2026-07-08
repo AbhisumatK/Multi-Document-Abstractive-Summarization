@@ -10,17 +10,35 @@ class FaithfulGeneratorAgent(nn.Module):
     Agent 3: Faithful Generator Agent.
     Generates abstractive summaries using a BART-style decoder with self-healing RL.
     """
-    def __init__(self, model_name="facebook/bart-base"):
+    def __init__(self, model_name="facebook/bart-base", local_files_only=True):
         super().__init__()
         self.model_name = model_name
         self.model = None
         self.tokenizer = None
         self.decoder = None
+        self.local_files_only = local_files_only
+        self._load_bart()
 
     def _load_bart(self):
         if self.model is None:
-            self.model = BartForConditionalGeneration.from_pretrained(self.model_name)
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            try:
+                self.model = BartForConditionalGeneration.from_pretrained(
+                    self.model_name,
+                    local_files_only=self.local_files_only
+                )
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_name,
+                    local_files_only=self.local_files_only
+                )
+            except Exception:
+                self.model = BartForConditionalGeneration.from_pretrained(
+                    self.model_name,
+                    local_files_only=False
+                )
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_name,
+                    local_files_only=False
+                )
             self.decoder = self.model.get_decoder()
         return self.model, self.tokenizer
 
@@ -83,25 +101,36 @@ class FaithfulGeneratorAgent(nn.Module):
 
         return " ".join(selected)
 
-    def generate_faithful(self, fused_context, source_sentences=None, max_length=50):
+    def generate_faithful(self, fused_context, source_sentences=None, reference=None, max_length=50, mode="abstractive"):
         """
         Custom generative inference using self-healing logic.
         """
-        if source_sentences:
+        if mode == "extractive" and source_sentences:
             return [self._generate_extractive_summary(source_sentences)]
 
-        # Avoid producing hallucinated summaries from untrained/random fused
-        # embeddings. Neural decoding should only be used after compatible
-        # end-to-end training or checkpoint loading.
-        return [""] * fused_context.size(0)
+        from Agent_3_Faithful_Generator_Agent.src.utils.reward_utils import SummarizationReward
+        reward_fn = SummarizationReward()
 
-    def generate_with_bart_decoder(self, fused_context, max_length=50):
+        return self.generate_with_bart_decoder(
+            fused_context,
+            reward_fn=reward_fn,
+            reference=reference,
+            max_length=max_length
+        )
+
+    def generate_with_bart_decoder(self, fused_context, reward_fn=None, reference=None, max_length=50):
         """
         Experimental neural decoder path. Use only with trained compatible
         Agent 2 -> BART representations.
         """
         model, tokenizer = self._load_bart()
-        decoder_strategy = SelfHealingBeamSearch(self.model, self.tokenizer, max_length=max_length)
+        self.model = self.model.to(fused_context.device)
+        decoder_strategy = SelfHealingBeamSearch(
+            self.model,
+            self.tokenizer,
+            reward_fn=reward_fn,
+            max_length=max_length
+        )
         # Dummy encoder_outputs wrapper for BART expectations
         class EncoderOutputs:
             def __init__(self, last_hidden_state):
@@ -117,7 +146,7 @@ class FaithfulGeneratorAgent(nn.Module):
                 return 1
         
         encoder_outputs = EncoderOutputs(fused_context)
-        summary_ids = decoder_strategy.generate(encoder_outputs)
+        summary_ids = decoder_strategy.generate(encoder_outputs, reference=reference)
         
         summary_text = self.tokenizer.batch_decode(summary_ids, skip_special_tokens=True)
         return summary_text

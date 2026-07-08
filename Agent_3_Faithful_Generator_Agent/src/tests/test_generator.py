@@ -15,7 +15,7 @@ def test_generator_agent():
     fused_context = torch.randn(batch_size, seq_len, d_model).to(device)
     
     summary = agent.generate_faithful(fused_context, max_length=10)
-    print(f"Generated sample summary: {summary}")
+    print(f"Generated sample summary: {repr(summary)}")
     assert isinstance(summary, list)
     assert len(summary) == batch_size
     
