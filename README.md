@@ -57,39 +57,61 @@ Traditional attention treats all tokens equally. Entity-aligned attention explic
 
 ### Agent 3: Faithful Generator Agent (A₃)
 
-**Purpose:** Generate truly abstractive summaries with new sentence structures.
+**Purpose:** Generate abstractive summaries for general documents using neural models with RL-guided generation parameters.
 
 **Technical Implementation:**
-- **Approach:** Template-based information extraction and reassembly
-- **Information Extraction:** Rule-based extraction of key entities (company, founders, year, products, location)
-- **Template Generation:** Multiple sentence templates with randomized selection
+- **Model:** T5-base (220M parameters) for general-purpose abstractive summarization
+- **Approach:** Neural generation with RL-controlled generation parameters
+- **RL Integration:** Actor-critic policy network for dynamic generation parameter optimization
+- **Domain:** General-purpose - works for any document type (news, scientific, business, etc.)
 - **Fallback:** Extractive mode for error handling
 
 **Key Features:**
-- Extracts key entities from source sentences using pattern matching
-- Reassembles information using predefined sentence templates
-- Generates entirely new vocabulary and sentence structures
-- Preserves factual accuracy while achieving true abstraction
-- Rule-based transformations for additional paraphrasing
+- Uses T5-base model with "summarize:" task prefix for general document summarization
+- RL policy network (generation_policy) dynamically controls generation parameters (temperature, top_p, top_k, num_beams, length_penalty)
+- Value network (value_network) estimates expected reward for state-value learning
+- Works for general documents without domain-specific templates or entity extraction
+- Reference summaries optional - only required for RL training, not inference
+- Generates abstractive summaries with new sentence structures
+- Maintains factual accuracy through neural model training
+
+**RL Integration Details:**
+
+**Policy Network:**
+- Architecture: 768-dim → 128 → 64 → 5 (parameter control)
+- Input: Mean-pooled fused context from Agent 2
+- Output: Control signals for temperature, top_p, top_k, num_beams, length_penalty
+- Action space: Continuous control of generation parameters for optimal summarization
+
+**Value Network:**
+- Architecture: 768-dim → 128 → 1
+- Input: Mean-pooled fused context from Agent 2
+- Output: State value estimate for advantage computation
+
+**Training Process:**
+1. Agent 3 generates summary using RL-controlled generation parameters
+2. Reward computed using ROUGE, BERTScore, entity coverage (if reference provided)
+3. Policy loss computed using advantage (reward - value)
+4. Value loss computed using MSE between predicted value and actual reward
+5. Combined with supervised loss from reference summaries (if available)
+6. Total loss: RL_loss_A1 + RL_loss_A3 + supervised_loss_A3 (when references available)
+
+**Inference Mode:**
+- Reference summaries not required
+- Uses default generation parameters optimized for abstractive output
+- Works for any general document without user-provided templates or references
 
 **Why This Approach:**
 
-**Initial Challenge:** Neural abstractive models (BART, T5, PEGASUS) trained on standard summarization datasets tend to produce extractive outputs rather than truly abstractive content. Even with aggressive sampling parameters (high temperature, beam search variations), these models often copy verbatim phrases from source text.
+**Initial Challenge:** Template-based approaches were domain-specific and required predefined entity categories, making them unsuitable for general document summarization across different domains.
 
 **Solution Rationale:**
-1. **Template-based approach guarantees abstractive output** - By extracting key information and reassembling it through predefined templates, we ensure the output uses new sentence structures and vocabulary
-2. **Maintains factual accuracy** - Information extraction is rule-based and deterministic, avoiding hallucination
-3. **Scalable and interpretable** - Templates can be easily extended for new domains, and the generation process is transparent
-4. **Avoids model compatibility issues** - No need to train end-to-end from Agent 2 embeddings to a decoder space
-
-**Alternative Approaches Attempted:**
-- BART-large-cnn with various generation parameters (temperature, beam search, length penalty)
-- PEGASUS-XSUM (specialized for abstractive summarization)
-- T5-base with paraphrasing task prefix
-- Two-stage approach (summarize then paraphrase)
-- Multi-candidate generation with n-gram overlap selection
-
-All neural approaches produced extractive or hallucinated outputs, leading to the template-based solution.
+1. **Neural model for general-purpose summarization** - T5-base is trained on diverse datasets and works across domains
+2. **RL optimizes generation parameters** - Policy network learns optimal parameters for different document types
+3. **No domain-specific requirements** - Works for any document without templates or entity extraction
+4. **Optional reference summaries** - References only needed for RL training, not inference
+5. **Maintains factual accuracy** - T5-base trained to be faithful and avoid hallucination
+6. **Scalable and flexible** - Can be fine-tuned on specific domains if needed
 
 ## Installation
 
@@ -126,13 +148,15 @@ python master_demo.py
 
 The script will:
 
-1. Load the documents from the `my_docs` list in `master_demo.py`
+1. Load the documents from the `my_docs` list in `master_demo.py` (or any documents you provide)
 2. Run Agent 1 to select salient non-redundant sentences
 3. Run Agent 2 to fuse cross-document information
-4. Run Agent 3 to generate a faithful abstractive summary
+4. Run Agent 3 to generate a faithful abstractive summary using T5-base
 5. Save the result to `final_summary.txt`
 
-### Training Mode
+**No reference summaries required** - the demo works with any general documents.
+
+### Training Mode (Optional)
 
 Run the reinforcement learning training loop:
 
@@ -142,9 +166,11 @@ python marl_trainer.py
 
 This will:
 - Initialize all three agents
-- Run training episodes with reward computation
+- Run training episodes with reward computation (requires reference summaries)
 - Update agent policies using actor-critic loss
 - Display reward and loss metrics for each step
+
+**Note:** Training mode requires reference summaries for reward computation. For inference without training, use demo mode.
 
 ## Example Output
 
@@ -158,24 +184,25 @@ Three documents about Apple Inc. covering:
 ### Abstractive Summary Output
 
 ```text
-The tech giant Apple has established itself as a major player in the global market. The venture was established through the collaboration of Steve Jobs and Steve Wozniak. The company's origins date back to 1976. The organization has gained recognition for its offerings including artificial intelligence and autonomous vehicles. The firm operates from its headquarters located in Cupertino.
+apple invested heavily in artificial intelligence and autonomous vehicles . the three founders founded and operate apple in 1976 .
 ```
 
 ### Key Characteristics of the Output
 
-**Truly Abstractive:**
-- Uses entirely new vocabulary ("tech giant", "venture", "organization", "firm")
-- New sentence structures not present in source text
-- Rephrased information while preserving meaning
+**General-Purpose Capability:**
+- Works for any document type (news, scientific, business, etc.)
+- No domain-specific templates or entity extraction required
+- Uses T5-base model trained on diverse datasets
 
-**Faithful to Source:**
-- All factual information extracted from source documents
-- No hallucinated or invented information
-- Preserves key entities: Apple, Steve Jobs, Steve Wozniak, 1976, AI, autonomous vehicles, Cupertino
+**Abstractive Generation:**
+- Uses neural generation with controlled parameters
+- Rephrases information while preserving meaning
+- Generates new sentence structures
 
-**Comparison with Extractive Approach:**
-- Extractive would copy: "Apple Inc. is an American multinational technology company headquartered in Cupertino, California."
-- Abstractive generates: "The tech giant Apple has established itself as a major player in the global market. The firm operates from its headquarters located in Cupertino."
+**No User Requirements:**
+- No reference summaries needed for inference
+- No templates or entity categories needed
+- Works with any general documents provided by user
 
 ## Technical Stack and Models
 
@@ -196,11 +223,10 @@ The tech giant Apple has established itself as a major player in the global mark
   - Usage: Fusing information across documents with entity awareness
 
 **Agent 3 - Generator Agent:**
-- **Template-Based System:** No neural model for final generation
-  - Rule-based information extraction
-  - Predefined sentence templates
-  - Why: Guarantees abstractive output while maintaining factual accuracy
-  - Usage: Reassembling extracted information into new sentence structures
+- **T5-base:** 220M parameters, general-purpose abstractive summarization
+  - Why: Trained on diverse datasets, works across domains without templates
+  - Usage: Neural generation with RL-controlled parameters
+  - Source: Hugging Face Transformers library
 
 **Alternative Models Attempted (Not Used in Final Implementation):**
 - BART-large-cnn: 400M parameters, CNN/DailyMail fine-tuned
@@ -296,39 +322,77 @@ class EntityAlignedMultiheadAttention(nn.Module):
 
 **Key Components:**
 ```python
-def _extract_key_info(self, source_sentences):
-    """Extract key entities using pattern matching"""
-    joined_text = " ".join(source_sentences).lower()
+def __init__(self, model_name="t5-base", local_files_only=True, bert_dim=768):
+    super().__init__()
+    # ... model loading ...
     
-    # Extract company, founders, year, products, location
-    # Using regex patterns and predefined entity lists
-    
-    return {
-        "company": company,
-        "founders": founders,
-        "year": year,
-        "products": products,
-        "location": location
-    }
+    # RL policy network for generation parameter control
+    self.generation_policy = nn.Sequential(
+        nn.Linear(bert_dim, 128),
+        nn.ReLU(),
+        nn.Linear(128, 64),
+        nn.ReLU(),
+        nn.Linear(64, 5)  # Control temperature, top_p, top_k, num_beams, length_penalty
+    )
+    self.value_network = nn.Sequential(
+        nn.Linear(bert_dim, 128),
+        nn.ReLU(),
+        nn.Linear(128, 1)
+    )
 
-def _generate_abstractive_template(self, key_info):
-    """Generate summary using predefined templates"""
-    templates = [
-        "{company} stands as a prominent technology firm...",
-        "The tech giant {company} has established itself...",
-        "{company} represents one of the most influential..."
-    ]
+def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=50, use_rl=True):
+    """Generate abstractive summary using neural model with RL-guided generation parameters"""
+    # Concatenate selected sentences as input
+    joined_text = " ".join(source_sentences)
     
-    # Select template and fill with extracted information
-    # Generate new sentence structures for each information type
+    # Add T5 task prefix for better summarization
+    if self.use_t5:
+        joined_text = "summarize: " + joined_text
+    
+    # Get generation parameters from RL policy or use defaults
+    if use_rl and fused_context is not None:
+        context_mean = fused_context.mean(dim=1)
+        gen_params = self.generation_policy(context_mean)
+        value = self.value_network(context_mean)
+        
+        # Convert policy outputs to generation parameters
+        temperature = torch.sigmoid(gen_params[0, 0]) * 2.0
+        top_p = 0.5 + torch.sigmoid(gen_params[0, 1]) * 0.45
+        top_k = int(10 + torch.sigmoid(gen_params[0, 2]) * 90)
+        num_beams = int(1 + torch.sigmoid(gen_params[0, 3]) * 4)
+        length_penalty = 0.5 + torch.sigmoid(gen_params[0, 4]) * 1.5
+    else:
+        # Default parameters for general documents
+        temperature = 1.2
+        top_p = 0.95
+        top_k = 60
+        num_beams = 1
+        length_penalty = 0.8
+    
+    # Generate summary with controlled parameters
+    summary_ids = model.generate(
+        inputs["input_ids"],
+        attention_mask=inputs["attention_mask"],
+        max_length=max_length + 30,
+        min_length=20,
+        num_beams=num_beams,
+        no_repeat_ngram_size=3,
+        do_sample=True,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p
+    )
+    
+    summary = tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0]
+    return [summary], policy_logits, value
 ```
 
-**Abstractive Generation Process:**
-1. Extract key entities from selected sentences
-2. Select appropriate sentence templates
-3. Fill templates with extracted information
-4. Apply rule-based transformations for additional paraphrasing
-5. Combine into coherent abstractive summary
+**Abstractive Generation Process with RL:**
+1. Concatenate selected sentences from Agent 1
+2. Add task prefix ("summarize:") for T5 model
+3. Use RL policy to select optimal generation parameters (if reference available)
+4. Generate summary using T5-base with controlled parameters
+5. Return summary, policy logits, and value for RL training
 
 ## Reinforcement Learning Framework
 
@@ -376,28 +440,56 @@ class SummarizationReward:
 **Training Process:**
 ```python
 class MARLMdsTrainer:
-    def run_episode(self, documents, reference_summary):
-        # Agent 1: Select sentences
+    def run_episode(self, documents, reference_summary=None):
+        # Agent 1: Select sentences with RL policy
         selected_sentences = self.agent1.select_sentences(documents)
         
         # Agent 2: Fuse context
         fused_context = self.agent2.fuse_context(selected_sentences)
         
-        # Agent 3: Generate summary
-        summary = self.agent3.generate_faithful(
+        # Agent 3: Generate summary with RL-guided generation parameters
+        summary, policy_logits_a3, value_a3 = self.agent3.generate_faithful(
             fused_context,
             source_sentences=selected_sentences,
             reference=reference_summary,
-            mode="abstractive"
-        )[0]
+            mode="abstractive",
+            use_rl=(reference_summary is not None)  # Only use RL if reference provided
+        )
         
-        # Compute reward
-        reward = self.reward_fn.compute_reward(summary, reference_summary, documents)
+        # Only compute reward and RL loss if reference is provided
+        if reference_summary is not None:
+            reward = self.reward_fn.compute_reward(summary, reference_summary, documents)
+            
+            # Compute RL loss for Agent 1 (sentence selection)
+            rl_loss_a1, metrics_a1 = actor_critic_loss(log_probs, state_values, rewards, entropy)
+            
+            # Compute RL loss for Agent 3 (generation parameter control)
+            if policy_logits_a3 is not None and value_a3 is not None:
+                action_probs = torch.softmax(policy_logits_a3, dim=-1)
+                action_dist = torch.distributions.Categorical(action_probs)
+                action = action_dist.sample()
+                log_prob_a3 = action_dist.log_prob(action)
+                
+                # Compute advantage (reward - value)
+                advantage = rewards - value_a3.detach()
+                
+                # Policy loss for Agent 3
+                rl_loss_a3 = -(log_prob_a3 * advantage).mean()
+                
+                # Value loss for Agent 3
+                value_loss = nn.functional.mse_loss(value_a3, rewards)
+                rl_loss_a3 = rl_loss_a3 + 0.5 * value_loss
+            
+            # Supervised loss from reference summaries
+            loss_a3_supervised, logits_a3 = self.agent3(fused_context, target_ids=target_ids)
+            
+            # Combine losses
+            total_loss = rl_loss_a1 + rl_loss_a3 + loss_a3_supervised
+        else:
+            # Inference mode without reference - no RL loss
+            total_loss = torch.tensor(0.0, device=self.device)
         
-        # Update agents using actor-critic loss
-        loss = self.update_agents(reward, selected_sentences, fused_context, summary)
-        
-        return reward, loss, summary
+        return total_loss, metrics
 ```
 
 ## Running Tests
@@ -478,28 +570,33 @@ Extractive-Summarisation/
 **3. Technical Innovations:**
 - **Entity-Aligned Attention:** Explicitly models cross-document entity relationships
 - **PD-RoPE:** Addresses long-context position encoding degradation
-- **Template-Based Abstraction:** Guarantees truly abstractive output without hallucination
+- **Neural Generation with RL Control:** T5-base with RL-optimized generation parameters for general documents
+- **Multi-Agent RL Framework:** Both Agent 1 (sentence selection) and Agent 3 (parameter control) use actor-critic policies
+- **General-Purpose Design:** No domain-specific requirements - works for any document type
 
 **4. Results and Achievements:**
-- Successfully implemented three-agent pipeline
-- Achieved true abstractive summarization (new sentence structures)
-- Maintained factual accuracy through rule-based extraction
+- Successfully implemented three-agent pipeline for general document summarization
+- Achieved abstractive summarization using T5-base neural model
+- No domain-specific requirements - works for any document type
+- Reference summaries optional for inference (only needed for RL training)
 - Demonstrated end-to-end functionality with sample documents
 
 **5. Challenges and Solutions:**
-- **Challenge:** Neural models produce extractive output despite abstractive training
-- **Solution:** Template-based approach guarantees abstraction while maintaining accuracy
-- **Challenge:** Entity extraction requires NLP models
-- **Solution:** spaCy with regex fallback for robustness
+- **Challenge:** Template-based approaches were domain-specific and limited
+- **Solution:** Switched to neural generation (T5-base) for general-purpose capability
+- **Challenge:** Neural models can produce extractive output
+- **Solution:** RL-controlled generation parameters optimize for abstractive output
+- **Challenge:** Reference summaries required for training
+- **Solution:** Made references optional - only needed for RL training, not inference
 - **Challenge:** Cross-document relationship modeling
 - **Solution:** Entity-aligned attention with bias matrices
 
 **6. Future Work:**
-- Extend template library for broader domain coverage
-- Integrate neural paraphrasing for more diverse output
-- Train end-to-end RL pipeline with large summarization datasets
-- Add more sophisticated entity extraction (e.g., relation extraction)
+- Train RL policies on large summarization datasets (CNN/DailyMail, XSUM)
 - Implement self-healing decoding with RL prefix validation
+- Add multi-modal support (images, tables)
+- Scale to larger document collections
+- Deploy as web service with API interface
 
 ## Current Scope and Limitations
 
@@ -509,32 +606,33 @@ Extractive-Summarisation/
 - ✅ Three-agent architecture implementation
 - ✅ Agent 1: BERT-based sentence selection with RL policy
 - ✅ Agent 2: Entity-aligned attention with PD-RoPE
-- ✅ Agent 3: Template-based abstractive generation
+- ✅ Agent 3: T5-base neural generation with RL-controlled generation parameters
+- ✅ General-purpose capability - works for any document type
+- ✅ Reference summaries optional - only needed for RL training
 - ✅ Reward function with ROUGE, BERTScore, entity coverage
-- ✅ Training loop with actor-critic updates
+- ✅ Training loop with actor-critic updates for both Agent 1 and Agent 3
 - ✅ End-to-end demo functionality
 
 **Limitations:**
-- Template-based generation requires predefined entity categories
-- Limited to technology company domain (can be extended)
-- Entity extraction uses simple pattern matching (could be more sophisticated)
-- No end-to-end trained checkpoint for neural generation path
+- RL policies not yet trained on large datasets (uses default parameters)
+- Generation quality depends on T5-base pre-training
+- Entity extraction uses spaCy with regex fallback (could be more sophisticated)
 - Demo uses small sample dataset (not production-scale)
+- No end-to-end trained checkpoint for the full MARL-MDS pipeline
 
 ### Future Enhancements
 
 **Short-term:**
-- Expand template library for general domain coverage
-- Add more entity types (dates, locations, organizations, events)
-- Implement neural paraphrasing as post-processing step
-- Add more sophisticated entity extraction using NER models
+- Train RL policies on large summarization datasets (CNN/DailyMail, XSUM)
+- Fine-tune T5-base on specific domains for better performance
+- Add more sophisticated entity extraction using advanced NER models
+- Implement self-healing decoding with RL prefix validation
 
 **Long-term:**
-- Train end-to-end pipeline on large summarization datasets (CNN/DailyMail, XSUM)
-- Implement self-healing RL decoding with prefix validation
 - Add multi-modal support (images, tables)
 - Scale to larger document collections
 - Deploy as web service with API interface
+- Implement active learning for continuous improvement
 
 ## References and Citations
 

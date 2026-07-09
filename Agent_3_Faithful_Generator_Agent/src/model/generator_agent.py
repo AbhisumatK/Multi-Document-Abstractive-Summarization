@@ -10,7 +10,7 @@ class FaithfulGeneratorAgent(nn.Module):
     Agent 3: Faithful Generator Agent.
     Generates abstractive summaries using T5 model for faithful abstractive summarization.
     """
-    def __init__(self, model_name="facebook/bart-base", local_files_only=True, bert_dim=768):
+    def __init__(self, model_name="t5-base", local_files_only=True, bert_dim=768):
         super().__init__()
         self.model_name = model_name
         self.model = None
@@ -26,6 +26,20 @@ class FaithfulGeneratorAgent(nn.Module):
         model_dim = self.model.config.hidden_size
         self.projection = nn.Linear(bert_dim, model_dim)
         self.layer_norm = nn.LayerNorm(model_dim)
+        
+        # RL policy network for generation parameter control
+        self.generation_policy = nn.Sequential(
+            nn.Linear(bert_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 5)  # Control temperature, top_p, top_k, num_beams, length_penalty
+        )
+        self.value_network = nn.Sequential(
+            nn.Linear(bert_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
+        )
 
     def _load_model(self):
         if self.model is None:
@@ -151,12 +165,12 @@ class FaithfulGeneratorAgent(nn.Module):
 
         return " ".join(selected)
 
-    def generate_faithful(self, fused_context, source_sentences=None, reference=None, max_length=50, mode="abstractive"):
+    def generate_faithful(self, fused_context, source_sentences=None, reference=None, max_length=50, mode="abstractive", use_rl=True):
         """
-        Custom generative inference using self-healing logic.
+        Custom generative inference using self-healing logic with RL.
         """
         if mode == "extractive" and source_sentences:
-            return [self._generate_extractive_summary(source_sentences)]
+            return [self._generate_extractive_summary(source_sentences)], 0, 0
 
         from Agent_3_Faithful_Generator_Agent.src.utils.reward_utils import SummarizationReward
         reward_fn = SummarizationReward()
@@ -166,7 +180,8 @@ class FaithfulGeneratorAgent(nn.Module):
             source_sentences=source_sentences,
             reward_fn=reward_fn,
             reference=reference,
-            max_length=max_length
+            max_length=max_length,
+            use_rl=use_rl
         )
 
     def _calculate_ngram_overlap(self, candidate, source):
@@ -202,97 +217,76 @@ class FaithfulGeneratorAgent(nn.Module):
         
         return transformed
 
-    def _extract_key_info(self, source_sentences):
-        """Extract key entities and information from source sentences."""
-        joined_text = " ".join(source_sentences).lower()
-        
-        # Extract company name
-        company = None
-        for name in ["apple", "microsoft", "google", "amazon", "meta"]:
-            if name in joined_text:
-                company = name.capitalize()
-                break
-        
-        # Extract founders
-        founders = []
-        for name in ["steve jobs", "steve wozniak", "bill gates", "mark zuckerberg", "jeff bezos"]:
-            if name in joined_text:
-                founders.append(name.title())
-        
-        # Extract year
-        year = re.search(r'\b(19|20)\d{2}\b', joined_text)
-        year = year.group() if year else None
-        
-        # Extract products/technologies
-        products = []
-        for product in ["iphone", "mac", "ipad", "android", "windows", "search engine", "cloud", "ai", "artificial intelligence", "autonomous vehicles"]:
-            if product in joined_text:
-                products.append(product)
-        
-        # Extract location
-        location = None
-        for loc in ["california", "cupertino", "washington", "new york", "seattle"]:
-            if loc in joined_text:
-                location = loc.capitalize()
-        
-        return {
-            "company": company,
-            "founders": founders,
-            "year": year,
-            "products": products,
-            "location": location
-        }
 
-    def _generate_abstractive_template(self, key_info):
-        """Generate abstractive summary using template-based approach."""
-        templates = [
-            "{company} stands as a prominent technology firm that has made significant impact in the industry.",
-            "The tech giant {company} has established itself as a major player in the global market.",
-            "{company} represents one of the most influential technology companies of our time."
-        ]
-        
-        summary_parts = []
-        
-        # Select a template
-        if key_info["company"]:
-            import random
-            template = random.choice(templates)
-            summary_parts.append(template.format(company=key_info["company"]))
-        
-        # Add founder information with new phrasing
-        if key_info["founders"]:
-            if len(key_info["founders"]) == 1:
-                summary_parts.append(f"The enterprise was co-founded by {key_info['founders'][0]}.")
-            else:
-                summary_parts.append(f"The venture was established through the collaboration of {', '.join(key_info['founders'][:-1])} and {key_info['founders'][-1]}.")
-        
-        # Add year with new phrasing
-        if key_info["year"]:
-            summary_parts.append(f"The company's origins date back to {key_info['year']}.")
-        
-        # Add products with new phrasing
-        if key_info["products"]:
-            product_list = ", ".join(key_info["products"][:-1]) + " and " + key_info["products"][-1] if len(key_info["products"]) > 1 else key_info["products"][0]
-            summary_parts.append(f"The organization has gained recognition for its offerings including {product_list}.")
-        
-        # Add location with new phrasing
-        if key_info["location"]:
-            summary_parts.append(f"The firm operates from its headquarters located in {key_info['location']}.")
-        
-        return " ".join(summary_parts)
-
-    def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=50):
+    def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=50, use_rl=True):
         """
-        Generate abstractive summary using template-based information extraction and reassembly.
-        This ensures truly new sentence structures rather than extraction.
+        Generate abstractive summary using neural model with RL-guided generation parameters.
+        Works for general documents without domain-specific templates.
         """
         if source_sentences is None or len(source_sentences) == 0:
-            return ["No source sentences provided for abstractive generation."]
+            return ["No source sentences provided for abstractive generation."], 0, 0
         
-        # Extract key information from source
-        key_info = self._extract_key_info(source_sentences)
+        # Concatenate selected sentences as input
+        joined_text = " ".join(source_sentences)
         
-        # Generate abstractive summary using templates
-        abstractive_summary = self._generate_abstractive_template(key_info)
+        # Add T5 task prefix for better summarization
+        if self.use_t5:
+            joined_text = "summarize: " + joined_text
         
-        return [abstractive_summary]
+        # Get generation parameters from RL policy or use defaults
+        if use_rl and fused_context is not None:
+            with torch.no_grad():
+                context_mean = fused_context.mean(dim=1)
+                gen_params = self.generation_policy(context_mean)
+                value = self.value_network(context_mean)
+                
+                # Convert policy outputs to generation parameters
+                temperature = torch.sigmoid(gen_params[0, 0]) * 2.0  # 0 to 2
+                top_p = 0.5 + torch.sigmoid(gen_params[0, 1]) * 0.45  # 0.5 to 0.95
+                top_k = int(10 + torch.sigmoid(gen_params[0, 2]) * 90)  # 10 to 100
+                num_beams = int(1 + torch.sigmoid(gen_params[0, 3]) * 4)  # 1 to 5
+                length_penalty = 0.5 + torch.sigmoid(gen_params[0, 4]) * 1.5  # 0.5 to 2.0
+                
+                policy_logits = gen_params
+        else:
+            # Default parameters for general documents - more aggressive for abstraction
+            temperature = 1.2
+            top_p = 0.95
+            top_k = 60
+            num_beams = 1  # Disable beam search for more diversity
+            length_penalty = 0.8  # Encourage shorter, more concise output
+            policy_logits = None
+            value = None
+        
+        model, tokenizer = self._load_model()
+        self.model = self.model.to(fused_context.device)
+        
+        # Tokenize input
+        inputs = tokenizer(
+            joined_text,
+            max_length=1024,
+            truncation=True,
+            padding=True,
+            return_tensors="pt"
+        ).to(fused_context.device)
+        
+        # Generate with controlled parameters
+        with torch.no_grad():
+            summary_ids = model.generate(
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                max_length=max_length + 30,
+                min_length=20,
+                num_beams=num_beams,
+                early_stopping=True,
+                no_repeat_ngram_size=3,
+                do_sample=True,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                length_penalty=length_penalty
+            )
+        
+        summary = tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0]
+        
+        return [summary], policy_logits, value

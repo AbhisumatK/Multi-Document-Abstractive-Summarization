@@ -4,6 +4,7 @@ import re
 import sys
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from transformers import AutoTokenizer
 
@@ -134,41 +135,80 @@ class MARLMdsTrainer:
         fused_context = self.agent2(sentence_embeddings, entity_bias=entity_bias)
 
         try:
-            summary = self.agent3.generate_faithful(
+            summary, policy_logits_a3, value_a3 = self.agent3.generate_faithful(
                 fused_context,
                 source_sentences=selected_sentences,
                 reference=reference_summary,
-                mode="abstractive"
-            )[0]
+                mode="abstractive",
+                use_rl=(reference_summary is not None)  # Only use RL if reference is provided
+            )
+            summary = summary[0]
         except Exception as e:
             print(f"Abstractive generation failed: {e}, falling back to extractive")
-            summary = self.agent3.generate_faithful(
+            summary, _, _ = self.agent3.generate_faithful(
                 fused_context,
                 source_sentences=selected_sentences,
                 reference=reference_summary,
-                mode="extractive"
-            )[0]
+                mode="extractive",
+                use_rl=False
+            )
+            summary = summary[0]
+            policy_logits_a3 = None
+            value_a3 = None
         
-        reward_value = self.reward_fn.compute_reward(summary, reference_summary, source_text=" ".join(documents))
-        rewards = torch.tensor([reward_value], device=self.device)
+        # Only compute reward and RL loss if reference is provided
+        if reference_summary is not None:
+            reward_value = self.reward_fn.compute_reward(summary, reference_summary, source_text=" ".join(documents))
+            rewards = torch.tensor([reward_value], device=self.device)
 
-        # Tokenize reference_summary for Agent 3 teacher forced loss
-        target_tokens = self.agent3.tokenizer(
-            reference_summary,
-            padding=True,
-            truncation=True,
-            max_length=64,
-            return_tensors="pt"
-        ).to(self.device)
-        target_ids = target_tokens["input_ids"]
+            # Compute RL loss for Agent 1
+            rl_loss_a1, metrics_a1 = actor_critic_loss(log_probs, state_values, rewards, entropy)
+            
+            # Compute RL loss for Agent 3 (generation parameter control)
+            rl_loss_a3 = torch.tensor(0.0, device=self.device)
+            if policy_logits_a3 is not None and value_a3 is not None:
+                # Sample action from policy logits
+                action_probs = torch.softmax(policy_logits_a3, dim=-1)
+                action_dist = torch.distributions.Categorical(action_probs)
+                action = action_dist.sample()
+                log_prob_a3 = action_dist.log_prob(action)
+                
+                # Compute advantage (reward - value)
+                advantage = rewards - value_a3.detach()
+                
+                # Policy loss for Agent 3
+                rl_loss_a3 = -(log_prob_a3 * advantage).mean()
+                
+                # Value loss for Agent 3
+                value_loss = nn.functional.mse_loss(value_a3, rewards)
+                rl_loss_a3 = rl_loss_a3 + 0.5 * value_loss
 
-        loss_a3, logits_a3 = self.agent3(fused_context, target_ids=target_ids)
+            # Tokenize reference_summary for Agent 3 teacher forced loss
+            target_tokens = self.agent3.tokenizer(
+                reference_summary,
+                padding=True,
+                truncation=True,
+                max_length=64,
+                return_tensors="pt"
+            ).to(self.device)
+            target_ids = target_tokens["input_ids"]
 
-        rl_loss, metrics = actor_critic_loss(log_probs, state_values, rewards, entropy)
-        total_loss = rl_loss + loss_a3
+            loss_a3_supervised, logits_a3 = self.agent3(fused_context, target_ids=target_ids)
 
-        metrics["loss_a3"] = loss_a3.item()
-        metrics["rl_loss"] = rl_loss.item()
+            # Combine losses
+            total_loss = rl_loss_a1 + rl_loss_a3 + loss_a3_supervised
+
+            metrics = metrics_a1.copy()
+            metrics["loss_a3_supervised"] = loss_a3_supervised.item()
+            metrics["rl_loss_a1"] = rl_loss_a1.item()
+            metrics["rl_loss_a3"] = rl_loss_a3.item()
+            metrics["reward"] = reward_value
+        else:
+            # Inference mode without reference - no RL loss
+            total_loss = torch.tensor(0.0, device=self.device)
+            metrics = {
+                "reward": 0.0
+            }
 
         return total_loss, {
             **metrics,
