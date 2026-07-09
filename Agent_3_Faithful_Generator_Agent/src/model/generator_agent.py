@@ -147,6 +147,27 @@ class FaithfulGeneratorAgent(nn.Module):
                 return True
         return False
 
+    @staticmethod
+    def _post_process_summary(text):
+        text = re.sub(r"\s+\.", ".", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return text
+
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        cleaned_sentences = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            if sentence[0].islower():
+                sentence = sentence[0].upper() + sentence[1:]
+            if not sentence.endswith((".", "!", "?")):
+                sentence += "."
+            cleaned_sentences.append(sentence)
+
+        return " ".join(cleaned_sentences)
+
     def _generate_extractive_summary(self, source_sentences, max_sentences=3):
         """
         Faithful demo-time generation.
@@ -217,76 +238,102 @@ class FaithfulGeneratorAgent(nn.Module):
         
         return transformed
 
+    def _decode_summary(self, text, device, max_length=80, num_beams=6, length_penalty=2.0):
+        model, tokenizer = self._load_model()
+        self.model = self.model.to(device)
 
-    def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=50, use_rl=True):
+        if self.use_t5 and not text.lower().startswith("summarize:"):
+            text = f"summarize: {text}"
+
+        inputs = tokenizer(
+            text,
+            max_length=1024,
+            truncation=True,
+            padding=True,
+            return_tensors="pt",
+        ).to(device)
+
+        with torch.no_grad():
+            summary_ids = model.generate(
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                max_length=max_length,
+                min_length=min(20, max(10, max_length // 4)),
+                num_beams=num_beams,
+                early_stopping=True,
+                no_repeat_ngram_size=3,
+                length_penalty=length_penalty,
+            )
+
+        return self._post_process_summary(
+            tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0]
+        )
+
+    def _generate_hierarchical_summary(self, source_sentences, device, max_length=120):
+        chunk_size = 3
+        partial_summaries = []
+        chunk_max_length = max(60, max_length // 2)
+
+        for start in range(0, len(source_sentences), chunk_size):
+            chunk = source_sentences[start:start + chunk_size]
+            chunk_text = " ".join(
+                self._clean_sentence(sentence).rstrip(".")
+                for sentence in chunk
+                if sentence.strip()
+            )
+            partial_summaries.append(
+                self._decode_summary(chunk_text, device, max_length=chunk_max_length)
+            )
+
+        partial_summaries = [summary for summary in partial_summaries if summary]
+        if not partial_summaries:
+            return ""
+
+        if len(partial_summaries) == 1:
+            return partial_summaries[0]
+
+        return self._decode_summary(
+            " ".join(partial_summaries),
+            device,
+            max_length=max_length,
+        )
+
+
+    def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=80, use_rl=True):
         """
         Generate abstractive summary using neural model with RL-guided generation parameters.
         Works for general documents without domain-specific templates.
         """
         if source_sentences is None or len(source_sentences) == 0:
             return ["No source sentences provided for abstractive generation."], 0, 0
-        
-        # Concatenate selected sentences as input
-        joined_text = " ".join(source_sentences)
-        
-        # Add T5 task prefix for better summarization
-        if self.use_t5:
-            joined_text = "summarize: " + joined_text
-        
-        # Get generation parameters from RL policy or use defaults
+
+        device = fused_context.device
+        policy_logits = None
+        value = None
+
         if use_rl and fused_context is not None:
             with torch.no_grad():
                 context_mean = fused_context.mean(dim=1)
                 gen_params = self.generation_policy(context_mean)
                 value = self.value_network(context_mean)
-                
-                # Convert policy outputs to generation parameters
-                temperature = torch.sigmoid(gen_params[0, 0]) * 2.0  # 0 to 2
-                top_p = 0.5 + torch.sigmoid(gen_params[0, 1]) * 0.45  # 0.5 to 0.95
-                top_k = int(10 + torch.sigmoid(gen_params[0, 2]) * 90)  # 10 to 100
-                num_beams = int(1 + torch.sigmoid(gen_params[0, 3]) * 4)  # 1 to 5
-                length_penalty = 0.5 + torch.sigmoid(gen_params[0, 4]) * 1.5  # 0.5 to 2.0
-                
                 policy_logits = gen_params
-        else:
-            # Default parameters for general documents - more aggressive for abstraction
-            temperature = 1.2
-            top_p = 0.95
-            top_k = 60
-            num_beams = 1  # Disable beam search for more diversity
-            length_penalty = 0.8  # Encourage shorter, more concise output
-            policy_logits = None
-            value = None
-        
-        model, tokenizer = self._load_model()
-        self.model = self.model.to(fused_context.device)
-        
-        # Tokenize input
-        inputs = tokenizer(
-            joined_text,
-            max_length=1024,
-            truncation=True,
-            padding=True,
-            return_tensors="pt"
-        ).to(fused_context.device)
-        
-        # Generate with controlled parameters
-        with torch.no_grad():
-            summary_ids = model.generate(
-                inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_length=max_length + 30,
-                min_length=20,
-                num_beams=num_beams,
-                early_stopping=True,
-                no_repeat_ngram_size=3,
-                do_sample=True,
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                length_penalty=length_penalty
+
+        if len(source_sentences) > 8:
+            summary = self._generate_hierarchical_summary(
+                source_sentences,
+                device,
+                max_length=max_length,
             )
-        
-        summary = tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0]
-        
+        else:
+            joined_text = " ".join(
+                self._clean_sentence(sentence).rstrip(".")
+                for sentence in source_sentences
+                if sentence.strip()
+            )
+            summary = self._decode_summary(
+                joined_text,
+                device,
+                max_length=max_length + 30,
+            )
+
         return [summary], policy_logits, value
