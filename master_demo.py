@@ -134,10 +134,25 @@ def encode_sentences_with_bertsum(model_a1, tokenizer, sentences, device):
 
     return aligned_sentences, cls_embs.squeeze(0), bert_scores
 
-def run_marl_mds_pipeline(documents):
+def load_checkpoint(checkpoint_path, device):
+    """Load trained agent weights from checkpoint."""
+    if not os.path.exists(checkpoint_path):
+        print(f"No checkpoint found at {checkpoint_path}, using untrained models.")
+        return None, None, None
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    print(f"Checkpoint loaded from {checkpoint_path}")
+    return checkpoint["agent1"], checkpoint["agent2"], checkpoint["agent3"]
+
+def run_marl_mds_pipeline(documents, checkpoint_path=None):
     device = torch.device("cpu")
     print(f"--- Starting MARL-MDS Pipeline ---")
     print(f"Input: {len(documents)} documents.")
+
+    # Load checkpoint if provided
+    agent1_state, agent2_state, agent3_state = None, None, None
+    if checkpoint_path:
+        agent1_state, agent2_state, agent3_state = load_checkpoint(checkpoint_path, device)
 
     # --- STAGE 1: Agent 1 (Hamilton Packing) ---
     print("\n[Agent 1] Packing salient information...")
@@ -146,6 +161,8 @@ def run_marl_mds_pipeline(documents):
     try:
         tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", local_files_only=True)
         model_a1 = BertSum(local_files_only=True).to(device)
+        if agent1_state is not None:
+            model_a1.load_state_dict(agent1_state)
         model_a1.eval()
 
         all_sentences, cls_embs, bert_scores = encode_sentences_with_bertsum(
@@ -179,6 +196,8 @@ def run_marl_mds_pipeline(documents):
     # --- STAGE 2: Agent 2 (Cross-Document Aggregation) ---
     print("\n[Agent 2] Fusing information across documents...")
     model_a2 = CrossDocumentAggregationAgent(d_model=768).to(device)
+    if agent2_state is not None:
+        model_a2.load_state_dict(agent2_state)
     model_a2.eval()
     
     entities = extract_entities(selected_sentences)
@@ -190,6 +209,8 @@ def run_marl_mds_pipeline(documents):
     # --- STAGE 3: Agent 3 (Faithful Generator) ---
     print("\n[Agent 3] Generating final faithful summary...")
     model_a3 = FaithfulGeneratorAgent().to(device)
+    if agent3_state is not None:
+        model_a3.load_state_dict(agent3_state)
     model_a3.eval()
     
     summary, _, _ = model_a3.generate_faithful(
@@ -202,9 +223,9 @@ def run_marl_mds_pipeline(documents):
     print("\n--- Final Summary ---")
     print(summary[0])
     
-    with open("final_summary.txt", "w", encoding="utf-8") as f:
+    with open("final_summary_2.txt", "w", encoding="utf-8") as f:
         f.write(summary[0])
-    print(f"\nSummary saved to final_summary.txt")
+    print(f"\nSummary saved to final_summary_2.txt")
     return summary[0]
 
 if __name__ == "__main__":
@@ -226,4 +247,8 @@ if __name__ == "__main__":
     "Scientists use robotic spacecraft, space telescopes, and planetary rovers to study the Solar System and search for evidence of past or present life beyond Earth.",
     "Recent space missions have focused on collecting asteroid samples, exploring Mars, and investigating the icy moons of Jupiter and Saturn for signs of habitable environments."
 ]
-    run_marl_mds_pipeline(my_docs)
+    
+    # Checkpoint path (will be used if exists after training)
+    checkpoint_path = os.path.join(project_root, "checkpoints", "marl_mds_multinews.pt")
+    
+    run_marl_mds_pipeline(my_docs, checkpoint_path=checkpoint_path)

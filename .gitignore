@@ -9,3 +9,4 @@ __pycache__/
 Agent_2_Document_Agregation_Agent/.vscode/
 Agent_1_Packing_Agent/.vscode/
 .DS_Store
+/checkpoints/

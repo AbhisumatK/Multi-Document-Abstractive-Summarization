@@ -65,6 +65,7 @@ class MARLMdsTrainer:
         model_name="bert-base-uncased",
         learning_rate=2e-5,
         local_files_only=True,
+        checkpoint_path=None,
     ):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=local_files_only)
@@ -78,6 +79,10 @@ class MARLMdsTrainer:
             list(self.agent1.parameters()) + list(self.agent2.parameters()) + list(self.agent3.parameters()),
             lr=learning_rate,
         )
+
+        # Load checkpoint if provided
+        if checkpoint_path is not None:
+            self.load_checkpoint(checkpoint_path)
 
     def encode_sentences(self, sentences):
         inputs = self.tokenizer(
@@ -94,7 +99,7 @@ class MARLMdsTrainer:
 
         return sentence_embeddings
 
-    def run_episode(self, documents, reference_summary, compression_ratio=0.5):
+    def run_episode(self, documents, reference_summary=None, compression_ratio=0.5):
         sentences = split_sentences(documents)
         if not sentences:
             raise ValueError("No sentences found in input documents.")
@@ -240,6 +245,14 @@ class MARLMdsTrainer:
             checkpoint_path,
         )
 
+    def load_checkpoint(self, checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        self.agent1.load_state_dict(checkpoint["agent1"])
+        self.agent2.load_state_dict(checkpoint["agent2"])
+        self.agent3.load_state_dict(checkpoint["agent3"])
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        print(f"Checkpoint loaded from {checkpoint_path}")
+
 
 if __name__ == "__main__":
     docs = [
@@ -247,14 +260,14 @@ if __name__ == "__main__":
         "Steve Jobs and Steve Wozniak founded Apple in 1976. The company is famous for the iPhone and Mac computers.",
         "Recent reports suggest Apple is investing heavily in artificial intelligence and autonomous vehicles to expand its product line.",
     ]
-    reference = (
-        "Apple is a major technology company headquartered in Cupertino. "
-        "It was founded by Steve Jobs and Steve Wozniak and is investing in AI and autonomous vehicles."
-    )
 
-    trainer = MARLMdsTrainer()
-    result = trainer.train_step(docs, reference)
-    print("--- MARL Training Step ---")
-    print(f"Reward: {result['reward']:.4f}")
-    print(f"Loss: {result['loss']:.4f}")
-    print("Summary:", result["summary"])
+    # Use trained checkpoint by default
+    checkpoint_path = os.path.join(project_root, "checkpoints", "marl_mds_multinews.pt")
+    
+    trainer = MARLMdsTrainer(checkpoint_path=checkpoint_path)
+    
+    # Run inference without reference summary
+    loss, metrics = trainer.run_episode(docs)
+    print("--- MARL Inference with Trained Model ---")
+    print("Summary:", metrics["summary"])
+    print(f"Selected {len(metrics['selected_sentences'])} sentences")

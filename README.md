@@ -272,22 +272,44 @@ python master_demo.py
 
 **No reference summary required.**
 
-### Training Mode — `marl_trainer.py`
+### Training Mode — `train_multinews.py`
+
+Train the MARL-MDS framework on the XSUM dataset:
 
 ```powershell
 conda activate GPU-pytorch
+python train_multinews.py
+```
+
+**Training process:**
+
+1. Load XSUM dataset from HuggingFace (100 samples by default)
+2. Initialize all three agents and Adam optimizer
+3. Run training episodes with reference summaries
+4. Compute reward (ROUGE, BERTScore, entity coverage) against reference summary
+5. Backpropagate combined loss: `RL_loss_A1 + RL_loss_A3 + supervised_loss_A3`
+6. Save trained checkpoint to `checkpoints/marl_mds_multinews.pt`
+
+**Trained model location:** `checkpoints/marl_mds_multinews.pt`
+
+**Note:** Training requires GPU for reasonable speed. The script uses the GPU-pytorch conda environment.
+
+### Inference Mode — `marl_trainer.py` (Using Trained Model)
+
+Run inference with the trained checkpoint:
+
+```powershell
 python marl_trainer.py
 ```
 
-**Training step:**
+**Inference process:**
 
-1. Initialize all three agents and Adam optimizer
-2. Run one episode: pack sentences (stochastic RL), fuse context, generate summary
-3. Compute reward (ROUGE, BERTScore, entity coverage) against reference summary
-4. Backpropagate combined loss: `RL_loss_A1 + RL_loss_A3 + supervised_loss_A3`
-5. Print reward, loss, and generated summary
+1. Load trained checkpoint from `checkpoints/marl_mds_multinews.pt`
+2. Run inference on sample documents
+3. Generate abstractive summaries using the trained model
+4. Print summary and selected sentences
 
-**Requires a reference summary** for meaningful training signal.
+**No reference summaries required** - the trained model has learned what good summarization looks like from the training phase.
 
 ---
 
