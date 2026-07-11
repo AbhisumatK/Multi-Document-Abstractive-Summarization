@@ -10,7 +10,8 @@ import math
 import os
 import re
 import sys
-import tim
+import time
+from datetime import datetime
 
 import torch
 from datasets import load_dataset
@@ -27,32 +28,34 @@ def parse_multinews_sample(sample):
     # XSUM has 'document' field as the document and 'summary' as the summary
     document = sample["document"]
     # Split document into sentences to simulate multiple documents
-    import re
     docs = [s.strip() for s in re.split(r"(?<=[.!?])\s+", document) if s.strip() and len(s.strip()) > 20]
-    
+
     # Take first few sentences to simulate multi-document input
     docs = docs[:5]  # Limit to 5 documents
-    
+
     summary = sample["summary"].strip()
-    
+
     return docs, summary
 
 
 def main():
     # --- Config ---
-    NUM_SAMPLES = 100        # Number of training samples (increase for better results)
-    EPOCHS = 2               # Number of passes over the data
+    NUM_SAMPLES = 500        # Number of training samples (increased for better results)
+    EPOCHS = 5               # Number of passes over the data (increased for better convergence)
     CHECKPOINT_DIR = os.path.join(project_root, "checkpoints")
-    CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "marl_mds_multinews.pt")
-    LOG_EVERY = 5            # Print metrics every N steps
+    # Add timestamp to checkpoint name to avoid overwriting existing model
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, f"marl_mds_multinews_{timestamp}.pt")
+    LOG_EVERY = 10           # Print metrics every N steps
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    print(f"Checkpoint will be saved to: {CHECKPOINT_PATH}")
 
     # --- Load Dataset ---
-    print("Loading XSUM dataset...")
+    print("Loading XSUM dataset (single-document, will split into multiple)...")
     dataset = load_dataset("EdinburghNLP/xsum", split=f"train[:{NUM_SAMPLES}]")
     print(f"Loaded {len(dataset)} samples.")
 

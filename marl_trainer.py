@@ -99,7 +99,7 @@ class MARLMdsTrainer:
 
         return sentence_embeddings
 
-    def run_episode(self, documents, reference_summary=None, compression_ratio=0.5):
+    def run_episode(self, documents, reference_summary=None, compression_ratio=0.5, max_length=150, summary_mode="abstractive"):
         sentences = split_sentences(documents)
         if not sentences:
             raise ValueError("No sentences found in input documents.")
@@ -139,21 +139,25 @@ class MARLMdsTrainer:
         entity_bias = get_entity_alignment_matrix(extract_entities(selected_sentences), device=self.device).unsqueeze(0)
         fused_context = self.agent2(sentence_embeddings, entity_bias=entity_bias)
 
+        # Use the selected summary mode
+        mode = summary_mode
         try:
             summary, policy_logits_a3, value_a3 = self.agent3.generate_faithful(
                 fused_context,
                 source_sentences=selected_sentences,
                 reference=reference_summary,
-                mode="abstractive",
+                max_length=max_length,
+                mode=mode,
                 use_rl=(reference_summary is not None)  # Only use RL if reference is provided
             )
             summary = summary[0]
         except Exception as e:
-            print(f"Abstractive generation failed: {e}, falling back to extractive")
+            print(f"{mode} generation failed: {e}, falling back to extractive")
             summary, _, _ = self.agent3.generate_faithful(
                 fused_context,
                 source_sentences=selected_sentences,
                 reference=reference_summary,
+                max_length=max_length,
                 mode="extractive",
                 use_rl=False
             )

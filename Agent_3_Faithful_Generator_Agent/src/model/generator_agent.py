@@ -238,7 +238,7 @@ class FaithfulGeneratorAgent(nn.Module):
         
         return transformed
 
-    def _decode_summary(self, text, device, max_length=80, num_beams=6, length_penalty=2.0):
+    def _decode_summary(self, text, device, max_length=150, num_beams=8, length_penalty=1.2):
         model, tokenizer = self._load_model()
         self.model = self.model.to(device)
 
@@ -258,11 +258,12 @@ class FaithfulGeneratorAgent(nn.Module):
                 inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
                 max_length=max_length,
-                min_length=min(20, max(10, max_length // 4)),
+                min_length=min(30, max(15, max_length // 3)),
                 num_beams=num_beams,
-                early_stopping=True,
-                no_repeat_ngram_size=3,
+                early_stopping=False,
+                no_repeat_ngram_size=2,
                 length_penalty=length_penalty,
+                do_sample=False,
             )
 
         return self._post_process_summary(
