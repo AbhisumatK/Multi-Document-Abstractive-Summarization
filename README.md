@@ -272,6 +272,30 @@ python master_demo.py
 
 **No reference summary required.**
 
+### Streamlit Web App — `app.py` (User-Friendly Interface)
+
+Launch the interactive web interface for easy document summarization:
+
+```powershell
+conda activate GPU-pytorch
+streamlit run app.py
+```
+
+**Features:**
+
+- Upload up to 10 text documents (.txt files)
+- Adjust summary length and compression ratio
+- View generated summary and selected sentences
+- Automatic fallback to extractive mode if trained model is unavailable
+- Real-time statistics and document preview
+
+**Requirements:**
+
+- Trained checkpoint at `checkpoints/marl_mds_multinews.pt` (for abstractive summarization)
+- If missing, the app will fall back to extractive summarization and show training instructions
+
+**Note:** The app runs locally on your machine. It is not deployed on the web due to the large model size (3.19GB).
+
 ### Training Mode — `train_multinews.py`
 
 Train the MARL-MDS framework on the XSUM dataset:

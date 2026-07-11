@@ -1,9 +1,14 @@
 
-from rouge_score import rouge_scorer
+try:
+    from rouge_score import rouge_scorer
+except ImportError:
+    rouge_scorer = None
+    print("Warning: rouge_score not installed. ROUGE metrics will be disabled.")
 try:
     import bert_score
 except ImportError:
     bert_score = None
+    print("Warning: bert_score not installed. BERTScore metrics will be disabled.")
 import torch
 import re
 
@@ -27,7 +32,7 @@ class SummarizationReward:
         self.topic_coverage_weight = topic_coverage_weight
         self.redundancy_penalty_weight = redundancy_penalty_weight
         self.use_bertscore = use_bertscore
-        self.rouge_scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+        self.rouge_scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True) if rouge_scorer else None
 
     @staticmethod
     def _tokens(text):
@@ -70,10 +75,19 @@ class SummarizationReward:
         """
         if not candidate or not reference:
             return 0.0
-            
-        # 1. Compute ROUGE
-        scores = self.rouge_scorer.score(reference, candidate)
-        rouge_l = scores['rougeL'].fmeasure
+
+        # 1. Compute ROUGE (fallback to simple overlap if rouge_scorer not available)
+        if self.rouge_scorer:
+            scores = self.rouge_scorer.score(reference, candidate)
+            rouge_l = scores['rougeL'].fmeasure
+        else:
+            # Simple token overlap as fallback
+            candidate_tokens = set(self._tokens(candidate))
+            reference_tokens = set(self._tokens(reference))
+            if not reference_tokens:
+                rouge_l = 0.0
+            else:
+                rouge_l = len(candidate_tokens & reference_tokens) / len(reference_tokens)
         
         # 2. Compute BERTScore (Semantic Similarity)
         if self.use_bertscore and bert_score is not None:
