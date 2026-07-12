@@ -165,7 +165,9 @@ def main():
                     st.header("Results")
 
                     # Model used
-                    if using_trained:
+                    if mode == "extractive":
+                        st.success(f"Used extractive summarization model")
+                    elif using_trained:
                         st.success(f"Used trained abstractive model (T5-base)")
                     else:
                         st.warning(f"Used untrained abstractive model (may hallucinate)")

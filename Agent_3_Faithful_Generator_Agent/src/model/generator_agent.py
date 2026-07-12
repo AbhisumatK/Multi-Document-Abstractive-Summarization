@@ -213,7 +213,7 @@ class FaithfulGeneratorAgent(nn.Module):
 
         return " ".join(cleaned_sentences)
 
-    def _generate_extractive_summary(self, source_sentences, max_sentences=3):
+    def _generate_extractive_summary(self, source_sentences, max_sentences=3, target_sentences=None):
         """
         Faithful demo-time generation.
 
@@ -221,6 +221,10 @@ class FaithfulGeneratorAgent(nn.Module):
         BART's text space. For inference, the safest faithful behavior is to
         surface the packed source facts directly and remove redundancy.
         """
+        # Use target_sentences if provided, otherwise use max_sentences
+        if target_sentences is not None:
+            max_sentences = target_sentences
+
         selected = []
         for sentence in source_sentences:
             cleaned = self._clean_sentence(sentence)
@@ -236,7 +240,7 @@ class FaithfulGeneratorAgent(nn.Module):
         Custom generative inference using self-healing logic with RL.
         """
         if mode == "extractive" and source_sentences:
-            return [self._generate_extractive_summary(source_sentences)], 0, 0
+            return [self._generate_extractive_summary(source_sentences, target_sentences=target_sentences)], 0, 0
 
         # Use hierarchical generation for longer summaries (more than 100 tokens)
         if max_length > 100 and source_sentences:
