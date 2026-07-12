@@ -13,6 +13,7 @@ Usage:
 """
 import os
 import sys
+import re
 import torch
 import streamlit as st
 
@@ -77,18 +78,18 @@ def main():
         "Maximum Summary Lines",
         min_value=1,
         max_value=20,
-        value=5,
-        help="Maximum number of lines in the generated summary (capped at half of total document lines)"
+        value=7,
+        help="Number of sentences in the generated summary. If set to 11, the summary will have approximately 11 sentences."
     )
 
     # Compression ratio parameter
     compression_ratio = st.sidebar.slider(
         "Compression Ratio",
-        min_value=0.1,
+        min_value=0.5,
         max_value=0.9,
-        value=0.5,
+        value=0.7,
         step=0.1,
-        help="Ratio of sentences to select from the input documents (0.1 = 10%, 0.5 = 50%)"
+        help="Controls how many sentences are selected from input documents for summarization. 0.5 = 50% (balanced), 0.7 = 70% (detailed), 0.9 = 90% (very detailed). This affects Agent 1's sentence selection before abstractive generation. Minimum set to 50% to ensure comprehensive coverage."
     )
 
     # File upload section
@@ -125,15 +126,15 @@ def main():
                 st.text(doc[:500] + "..." if len(doc) > 500 else doc)
                 st.divider()
 
-        # Calculate actual max summary lines (capped at half of total sentences)
+        # Calculate actual max summary lines (use user's requested value directly)
         from marl_trainer import split_sentences
         all_sentences = split_sentences(documents)
         total_sentences = len(all_sentences)
-        actual_max_lines = min(max_summary_lines, total_sentences // 2)
+        actual_max_lines = max_summary_lines  # Use user's requested value directly
         if actual_max_lines < 1:
             actual_max_lines = 1
 
-        st.info(f"Total document sentences: {total_sentences} | Max summary lines: {actual_max_lines}")
+        st.info(f"Total document sentences: {total_sentences} | Requested summary sentences: {actual_max_lines}")
 
         # Generate summary button
         if st.button("Generate Summary", type="primary"):
@@ -141,12 +142,12 @@ def main():
                 try:
                     # Load trainer with the specific new checkpoint
                     checkpoint_dir = os.path.join(project_root, "checkpoints")
-                    specific_checkpoint = "marl_mds_multinews_20260711_205245.pt"
+                    specific_checkpoint = "marl_mds_multinews_20260712_102629.pt"
                     trainer, using_trained, checkpoint_path = load_trainer(checkpoint_dir, specific_checkpoint)
 
                     # Run inference with max_length based on user preference
-                    # Convert lines to approximate tokens (roughly 15 tokens per line)
-                    max_length_tokens = actual_max_lines * 20
+                    # Convert lines to approximate tokens (roughly 50 tokens per sentence for longer summaries)
+                    max_length_tokens = actual_max_lines * 50
 
                     # Determine summary mode
                     mode = "extractive" if "Extractive" in summary_mode else "abstractive"
@@ -156,7 +157,8 @@ def main():
                         reference_summary=None,
                         compression_ratio=compression_ratio,
                         max_length=max_length_tokens,
-                        summary_mode=mode
+                        summary_mode=mode,
+                        target_sentences=actual_max_lines
                     )
 
                     # Display results
@@ -184,7 +186,9 @@ def main():
                     col1, col2, col3 = st.columns(3)
                     col1.metric("Input Documents", len(documents))
                     col2.metric("Selected Sentences", len(selected_sentences))
-                    col3.metric("Summary Lines", len(summary.split('\n')))
+                    # Count sentences by splitting on sentence terminators
+                    summary_sentences = len(re.split(r'[.!?]+', summary)) - 1 if summary else 0
+                    col3.metric("Summary Lines", summary_sentences)
 
                 except Exception as e:
                     st.error(f"Error generating summary: {str(e)}")

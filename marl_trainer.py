@@ -99,7 +99,7 @@ class MARLMdsTrainer:
 
         return sentence_embeddings
 
-    def run_episode(self, documents, reference_summary=None, compression_ratio=0.5, max_length=150, summary_mode="abstractive"):
+    def run_episode(self, documents, reference_summary=None, compression_ratio=0.5, max_length=150, summary_mode="abstractive", target_sentences=None):
         sentences = split_sentences(documents)
         if not sentences:
             raise ValueError("No sentences found in input documents.")
@@ -129,7 +129,7 @@ class MARLMdsTrainer:
         )
         salience_scores = salience_scores[:, :len(sentences)]
 
-        k = min(3, max(1, math.ceil(len(sentences) * compression_ratio)))
+        k = max(1, math.ceil(len(sentences) * compression_ratio))  # Remove cap to allow more sentences
         selected_indices, log_probs, entropy = sample_sentence_actions(salience_scores, k=k)
         selected_indices_list = selected_indices[0].detach().cpu().tolist()
         selected_indices_list.sort()
@@ -148,7 +148,8 @@ class MARLMdsTrainer:
                 reference=reference_summary,
                 max_length=max_length,
                 mode=mode,
-                use_rl=(reference_summary is not None)  # Only use RL if reference is provided
+                use_rl=(reference_summary is not None),  # Only use RL if reference is provided
+                target_sentences=target_sentences
             )
             summary = summary[0]
         except Exception as e:
@@ -159,7 +160,8 @@ class MARLMdsTrainer:
                 reference=reference_summary,
                 max_length=max_length,
                 mode="extractive",
-                use_rl=False
+                use_rl=False,
+                target_sentences=target_sentences
             )
             summary = summary[0]
             policy_logits_a3 = None

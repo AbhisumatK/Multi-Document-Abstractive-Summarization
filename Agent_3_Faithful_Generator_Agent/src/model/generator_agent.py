@@ -154,11 +154,27 @@ class FaithfulGeneratorAgent(nn.Module):
         if not text:
             return text
 
+        # Aggressive gibberish removal
+        text = re.sub(r'([^\w\s.,!?\'"-]{2,})', '', text)  # Remove 2+ consecutive special chars
+        text = re.sub(r'\s*[nN]\s*[sS]\s*', '', text)  # Remove "n s" patterns
+        text = re.sub(r'\s*[gG][rR][aA]+\s*', '', text)  # Remove "gra" patterns
+        text = re.sub(r'\s*[-–—_]{2,}\s*', ' ', text)  # Remove multiple dashes/underscores
+        text = re.sub(r'\s*[sS]{3,}\s*', '', text)  # Remove multiple "s" characters
+        text = re.sub(r'\s*[nN]{2,}\s*', '', text)  # Remove multiple "n" characters
+
         sentences = re.split(r"(?<=[.!?])\s+", text)
         cleaned_sentences = []
         for sentence in sentences:
             sentence = sentence.strip()
             if not sentence:
+                continue
+            # Aggressive filtering - skip sentences with high special char ratio
+            normal_chars = len(re.findall(r'[a-zA-Z0-9\s]', sentence))
+            total_chars = len(sentence)
+            if total_chars > 0 and normal_chars / total_chars < 0.7:
+                continue  # Skip sentences that are mostly special characters
+            # Skip very short sentences (likely fragments)
+            if len(sentence.split()) < 5:
                 continue
             if sentence[0].islower():
                 sentence = sentence[0].upper() + sentence[1:]
@@ -186,12 +202,21 @@ class FaithfulGeneratorAgent(nn.Module):
 
         return " ".join(selected)
 
-    def generate_faithful(self, fused_context, source_sentences=None, reference=None, max_length=50, mode="abstractive", use_rl=True):
+    def generate_faithful(self, fused_context, source_sentences=None, reference=None, max_length=50, mode="abstractive", use_rl=True, target_sentences=None):
         """
         Custom generative inference using self-healing logic with RL.
         """
         if mode == "extractive" and source_sentences:
             return [self._generate_extractive_summary(source_sentences)], 0, 0
+
+        # Use hierarchical generation for longer summaries (more than 100 tokens)
+        if max_length > 100 and source_sentences:
+            device = fused_context.device
+            # Calculate target sentences from max_length if not provided
+            if target_sentences is None:
+                target_sentences = max(5, max_length // 20)
+            hierarchical_summary = self._generate_hierarchical_summary(source_sentences, device, max_length, target_sentences)
+            return [hierarchical_summary], 0, 0
 
         from Agent_3_Faithful_Generator_Agent.src.utils.reward_utils import SummarizationReward
         reward_fn = SummarizationReward()
@@ -257,12 +282,12 @@ class FaithfulGeneratorAgent(nn.Module):
             summary_ids = model.generate(
                 inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
-                max_length=max_length,
-                min_length=min(30, max(15, max_length // 3)),
+                max_length=min(max_length, 300),  # Cap at 300 to prevent gibberish
+                min_length=min(30, max(15, max_length // 4)),  # More conservative min_length
                 num_beams=num_beams,
-                early_stopping=False,
-                no_repeat_ngram_size=2,
-                length_penalty=length_penalty,
+                early_stopping=True,  # Enable early stopping to prevent over-generation
+                no_repeat_ngram_size=3,
+                length_penalty=1.2,  # Standard length penalty
                 do_sample=False,
             )
 
@@ -270,10 +295,15 @@ class FaithfulGeneratorAgent(nn.Module):
             tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0]
         )
 
-    def _generate_hierarchical_summary(self, source_sentences, device, max_length=120):
-        chunk_size = 3
+    def _generate_hierarchical_summary(self, source_sentences, device, max_length=120, target_sentences=None):
+        # Calculate target number of sentences based on max_length (roughly 20 tokens per sentence)
+        if target_sentences is None:
+            target_sentences = max(5, max_length // 20)
+
+        # Process sentences in smaller chunks to generate more content
+        chunk_size = 2  # Smaller chunks for more detailed summaries
         partial_summaries = []
-        chunk_max_length = max(60, max_length // 2)
+        chunk_max_length = max(40, max_length // len(source_sentences) + 20)
 
         for start in range(0, len(source_sentences), chunk_size):
             chunk = source_sentences[start:start + chunk_size]
@@ -282,22 +312,34 @@ class FaithfulGeneratorAgent(nn.Module):
                 for sentence in chunk
                 if sentence.strip()
             )
-            partial_summaries.append(
-                self._decode_summary(chunk_text, device, max_length=chunk_max_length)
-            )
+            if chunk_text.strip():
+                partial_summaries.append(
+                    self._decode_summary(chunk_text, device, max_length=chunk_max_length)
+                )
 
-        partial_summaries = [summary for summary in partial_summaries if summary]
+        partial_summaries = [summary for summary in partial_summaries if summary and len(summary.split()) > 3]
         if not partial_summaries:
             return ""
 
-        if len(partial_summaries) == 1:
-            return partial_summaries[0]
+        # Combine all partial summaries
+        combined = " ".join(partial_summaries)
 
-        return self._decode_summary(
-            " ".join(partial_summaries),
-            device,
-            max_length=max_length,
-        )
+        # Split into sentences and ensure we have enough
+        sentences = re.split(r"(?<=[.!?])\s+", combined)
+        sentences = [s.strip() for s in sentences if s.strip() and len(s.split()) > 3]
+
+        # If we don't have enough sentences, generate more from the full text
+        if len(sentences) < target_sentences:
+            full_text = " ".join(source_sentences)
+            additional_summary = self._decode_summary(full_text, device, max_length=max_length)
+            additional_sentences = re.split(r"(?<=[.!?])\s+", additional_summary)
+            additional_sentences = [s.strip() for s in additional_sentences if s.strip() and len(s.split()) > 3]
+            sentences.extend(additional_sentences)
+
+        # STRICTLY limit to target_sentences - take exactly that many
+        final_sentences = sentences[:target_sentences]
+
+        return " ".join(final_sentences)
 
 
     def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=80, use_rl=True):

@@ -306,7 +306,7 @@ python train_multinews.py
 ```
 
 **Training process:**
-
+[1]
 1. Load XSUM dataset from HuggingFace (100 samples by default)
 2. Initialize all three agents and Adam optimizer
 3. Run training episodes with reference summaries
@@ -315,6 +315,19 @@ python train_multinews.py
 6. Save trained checkpoint to `checkpoints/marl_mds_multinews.pt`
 
 **Trained model location:** `checkpoints/marl_mds_multinews.pt`
+[2]
+1. Load XSUM dataset from HuggingFace (500 samples by default)
+2. Split single documents into sentences to simulate multi-document input
+3. Initialize all three agents and Adam optimizer
+4. Run training episodes with reference summaries (5 epochs)
+5. Compute reward (ROUGE, BERTScore, entity coverage) against reference summary
+6. Backpropagate combined loss: `RL_loss_A1 + RL_loss_A3 + supervised_loss_A3`
+7. Save trained checkpoint with timestamp to `checkpoints/marl_mds_multinews_YYYYMMDD_HHMMSS.pt`
+
+**Latest trained model:** `checkpoints/marl_mds_multinews_20260711_205245.pt`
+- Dataset: XSUM (500 samples)
+- Epochs: 5
+- Training configuration: Improved generation parameters (8 beams, length_penalty=1.2)
 
 **Note:** Training requires GPU for reasonable speed. The script uses the GPU-pytorch conda environment.
 
