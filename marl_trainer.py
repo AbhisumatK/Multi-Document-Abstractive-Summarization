@@ -99,7 +99,7 @@ class MARLMdsTrainer:
 
         return sentence_embeddings
 
-    def run_episode(self, documents, reference_summary=None, compression_ratio=0.5, max_length=150, summary_mode="abstractive", target_sentences=None):
+    def run_episode(self, documents, reference_summary=None, compression_ratio=0.5, max_length=150, summary_mode="abstractive", target_sentences=None, source_documents=None):
         sentences = split_sentences(documents)
         if not sentences:
             raise ValueError("No sentences found in input documents.")
@@ -149,7 +149,8 @@ class MARLMdsTrainer:
                 max_length=max_length,
                 mode=mode,
                 use_rl=(reference_summary is not None),  # Only use RL if reference is provided
-                target_sentences=target_sentences
+                target_sentences=target_sentences,
+                source_documents=documents if source_documents is None else source_documents
             )
             summary = summary[0]
         except Exception as e:
@@ -161,7 +162,8 @@ class MARLMdsTrainer:
                 max_length=max_length,
                 mode="extractive",
                 use_rl=False,
-                target_sentences=target_sentences
+                target_sentences=target_sentences,
+                source_documents=documents if source_documents is None else source_documents
             )
             summary = summary[0]
             policy_logits_a3 = None

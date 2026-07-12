@@ -148,11 +148,33 @@ class FaithfulGeneratorAgent(nn.Module):
         return False
 
     @staticmethod
-    def _post_process_summary(text):
+    def _post_process_summary(text, source_documents=None):
         text = re.sub(r"\s+\.", ".", text)
         text = re.sub(r"\s+", " ", text).strip()
         if not text:
             return text
+
+        # Remove false attribution patterns like "Name:" at the start
+        # Only remove if the name is NOT found in source documents
+        if source_documents:
+            source_text = " ".join(source_documents).lower()
+
+            # Check for "Firstname Lastname:" pattern at start (very flexible pattern)
+            # This catches: "Bob Greene:", "bob greene:", "BOB GREENE:", etc.
+            name_match = re.match(r'^([A-Za-z]+\s+[A-Za-z]+):\s*', text, re.IGNORECASE)
+            if name_match:
+                name = name_match.group(1).lower()
+                # Only remove if name is not in source documents
+                if name not in source_text:
+                    text = re.sub(r'^[A-Za-z]+\s+[A-Za-z]+:\s*', '', text, flags=re.IGNORECASE)
+
+            # Check for single name pattern at start (very flexible)
+            single_name_match = re.match(r'^([A-Za-z]+):\s*', text, re.IGNORECASE)
+            if single_name_match:
+                name = single_name_match.group(1).lower()
+                # Only remove if name is not in source documents
+                if name not in source_text:
+                    text = re.sub(r'^[A-Za-z]+:\s*', '', text, flags=re.IGNORECASE)
 
         # Aggressive gibberish removal
         text = re.sub(r'([^\w\s.,!?\'"-]{2,})', '', text)  # Remove 2+ consecutive special chars
@@ -168,6 +190,13 @@ class FaithfulGeneratorAgent(nn.Module):
             sentence = sentence.strip()
             if not sentence:
                 continue
+            # Remove attribution patterns within sentences like "name says" - only if name not in source
+            if source_documents:
+                says_match = re.search(r'([A-Za-z]+)\s+says', sentence, re.IGNORECASE)
+                if says_match:
+                    name = says_match.group(1).lower()
+                    if name not in source_text:
+                        sentence = re.sub(r'\s+[a-z]+\s+says\s*', '', sentence, flags=re.IGNORECASE)
             # Aggressive filtering - skip sentences with high special char ratio
             normal_chars = len(re.findall(r'[a-zA-Z0-9\s]', sentence))
             total_chars = len(sentence)
@@ -202,7 +231,7 @@ class FaithfulGeneratorAgent(nn.Module):
 
         return " ".join(selected)
 
-    def generate_faithful(self, fused_context, source_sentences=None, reference=None, max_length=50, mode="abstractive", use_rl=True, target_sentences=None):
+    def generate_faithful(self, fused_context, source_sentences=None, reference=None, max_length=50, mode="abstractive", use_rl=True, target_sentences=None, source_documents=None):
         """
         Custom generative inference using self-healing logic with RL.
         """
@@ -215,7 +244,7 @@ class FaithfulGeneratorAgent(nn.Module):
             # Calculate target sentences from max_length if not provided
             if target_sentences is None:
                 target_sentences = max(5, max_length // 20)
-            hierarchical_summary = self._generate_hierarchical_summary(source_sentences, device, max_length, target_sentences)
+            hierarchical_summary = self._generate_hierarchical_summary(source_sentences, device, max_length, target_sentences, source_documents)
             return [hierarchical_summary], 0, 0
 
         from Agent_3_Faithful_Generator_Agent.src.utils.reward_utils import SummarizationReward
@@ -227,7 +256,9 @@ class FaithfulGeneratorAgent(nn.Module):
             reward_fn=reward_fn,
             reference=reference,
             max_length=max_length,
-            use_rl=use_rl
+            use_rl=use_rl,
+            target_sentences=target_sentences,
+            source_documents=source_documents
         )
 
     def _calculate_ngram_overlap(self, candidate, source):
@@ -292,10 +323,11 @@ class FaithfulGeneratorAgent(nn.Module):
             )
 
         return self._post_process_summary(
-            tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0]
+            tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0],
+            source_documents=None  # No source documents available at this level
         )
 
-    def _generate_hierarchical_summary(self, source_sentences, device, max_length=120, target_sentences=None):
+    def _generate_hierarchical_summary(self, source_sentences, device, max_length=120, target_sentences=None, source_documents=None):
         # Calculate target number of sentences based on max_length (roughly 20 tokens per sentence)
         if target_sentences is None:
             target_sentences = max(5, max_length // 20)
@@ -339,10 +371,13 @@ class FaithfulGeneratorAgent(nn.Module):
         # STRICTLY limit to target_sentences - take exactly that many
         final_sentences = sentences[:target_sentences]
 
-        return " ".join(final_sentences)
+        final_summary = " ".join(final_sentences)
+
+        # Post-process with source documents to remove hallucinated attributions
+        return self._post_process_summary(final_summary, source_documents=source_documents)
 
 
-    def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=80, use_rl=True):
+    def generate_with_bart_decoder(self, fused_context, source_sentences=None, reward_fn=None, reference=None, max_length=80, use_rl=True, target_sentences=None, source_documents=None):
         """
         Generate abstractive summary using neural model with RL-guided generation parameters.
         Works for general documents without domain-specific templates.
@@ -366,6 +401,8 @@ class FaithfulGeneratorAgent(nn.Module):
                 source_sentences,
                 device,
                 max_length=max_length,
+                target_sentences=target_sentences,
+                source_documents=source_documents
             )
         else:
             joined_text = " ".join(
@@ -378,5 +415,7 @@ class FaithfulGeneratorAgent(nn.Module):
                 device,
                 max_length=max_length + 30,
             )
+            # Post-process with source documents to remove hallucinated attributions
+            summary = self._post_process_summary(summary, source_documents=source_documents)
 
         return [summary], policy_logits, value
