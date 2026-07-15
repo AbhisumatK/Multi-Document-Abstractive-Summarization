@@ -2,11 +2,15 @@ import math
 import os
 import re
 import sys
+import time
+from datetime import datetime
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from transformers import AutoTokenizer
+import tensorflow_datasets as tfds
+from rouge_score import rouge_scorer
 
 
 project_root = os.getcwd()
@@ -262,20 +266,153 @@ class MARLMdsTrainer:
         print(f"Checkpoint loaded from {checkpoint_path}")
 
 
-if __name__ == "__main__":
-    docs = [
-        "Apple Inc. is an American multinational technology company headquartered in Cupertino, California. It is the world's largest technology company by revenue.",
-        "Steve Jobs and Steve Wozniak founded Apple in 1976. The company is famous for the iPhone and Mac computers.",
-        "Recent reports suggest Apple is investing heavily in artificial intelligence and autonomous vehicles to expand its product line.",
-    ]
+def parse_multinews_sample(sample):
+    """Parse Multi-News sample into documents and summary."""
+    document = sample['document'].numpy().decode('utf-8')
+    docs = [doc.strip() for doc in document.split("|||||") if doc.strip()]
+    summary = sample['summary'].numpy().decode('utf-8')
+    return docs, summary
 
-    # Use trained checkpoint by default
-    checkpoint_path = os.path.join(project_root, "checkpoints", "marl_mds_multinews.pt")
+
+def evaluate_model(num_samples=50):
+    """Evaluate the trained model on Multi-News test set and compute ROUGE scores."""
+    print("=== Model Evaluation ===")
     
-    trainer = MARLMdsTrainer(checkpoint_path=checkpoint_path)
+    CHECKPOINT_DIR = os.path.join(project_root, "checkpoints")
     
-    # Run inference without reference summary
-    loss, metrics = trainer.run_episode(docs)
-    print("--- MARL Inference with Trained Model ---")
-    print("Summary:", metrics["summary"])
-    print(f"Selected {len(metrics['selected_sentences'])} sentences")
+    # Find latest checkpoint
+    checkpoints = [f for f in os.listdir(CHECKPOINT_DIR) if f.endswith('.pt')]
+    if not checkpoints:
+        print("No checkpoints found in checkpoints/ directory")
+        return
+    
+    latest_checkpoint = max(checkpoints, key=lambda x: os.path.getmtime(os.path.join(CHECKPOINT_DIR, x)))
+    CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, latest_checkpoint)
+    
+    print(f"Using checkpoint: {CHECKPOINT_PATH}")
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    
+    # Load dataset
+    print("Loading Multi-News test dataset...")
+    ds = tfds.load('multi_news', split=f'test[:{num_samples}]')
+    print(f"Loaded {num_samples} samples from Multi-News test set.")
+    
+    # Initialize trainer
+    trainer = MARLMdsTrainer(checkpoint_path=CHECKPOINT_PATH)
+    
+    # Initialize ROUGE scorer
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+    
+    # Evaluation
+    print("\n=== Starting Evaluation ===")
+    rouge1_scores = []
+    rouge2_scores = []
+    rougeL_scores = []
+    
+    total_samples = 0
+    skipped = 0
+    start_time = time.time()
+    
+    for i, sample in enumerate(ds):
+        docs, reference_summary = parse_multinews_sample(sample)
+        
+        if len(docs) < 2 or len(reference_summary) < 10:
+            skipped += 1
+            continue
+        
+        try:
+            # Generate summary
+            _, metrics = trainer.run_episode(
+                documents=docs,
+                reference_summary=None,
+                compression_ratio=0.7,
+                max_length=150,
+                summary_mode="abstractive",
+                target_sentences=None
+            )
+            
+            generated_summary = metrics["summary"]
+            
+            # Compute ROUGE scores
+            scores = scorer.score(reference_summary, generated_summary)
+            
+            rouge1_scores.append(scores['rouge1'].fmeasure)
+            rouge2_scores.append(scores['rouge2'].fmeasure)
+            rougeL_scores.append(scores['rougeL'].fmeasure)
+            
+            total_samples += 1
+            
+            if (i + 1) % 5 == 0:
+                print(f"Processed {i + 1} samples...")
+                
+        except Exception as e:
+            print(f"Sample {i} skipped due to error: {e}")
+            skipped += 1
+            continue
+    
+    # Compute average scores
+    if total_samples > 0:
+        avg_rouge1 = sum(rouge1_scores) / len(rouge1_scores)
+        avg_rouge2 = sum(rouge2_scores) / len(rouge2_scores)
+        avg_rougeL = sum(rougeL_scores) / len(rougeL_scores)
+        
+        elapsed_time = time.time() - start_time
+        
+        print("\n=== Evaluation Results ===")
+        print(f"Total samples evaluated: {total_samples}")
+        print(f"Samples skipped: {skipped}")
+        print(f"Evaluation time: {elapsed_time:.2f} seconds")
+        print(f"\nROUGE-1: {avg_rouge1:.4f}")
+        print(f"ROUGE-2: {avg_rouge2:.4f}")
+        print(f"ROUGE-L: {avg_rougeL:.4f}")
+        
+        # Save results
+        results_file = os.path.join(project_root, "evaluation_results.txt")
+        with open(results_file, 'w') as f:
+            f.write("=== MARL-MDS Model Evaluation Results ===\n")
+            f.write(f"Checkpoint: {CHECKPOINT_PATH}\n")
+            f.write(f"Dataset: Multi-News test set\n")
+            f.write(f"Samples evaluated: {total_samples}\n")
+            f.write(f"Evaluation time: {elapsed_time:.2f} seconds\n")
+            f.write(f"\nROUGE Scores:\n")
+            f.write(f"ROUGE-1: {avg_rouge1:.4f}\n")
+            f.write(f"ROUGE-2: {avg_rouge2:.4f}\n")
+            f.write(f"ROUGE-L: {avg_rougeL:.4f}\n")
+            f.write(f"\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        
+        print(f"\nResults saved to {results_file}")
+    else:
+        print("No samples were successfully evaluated.")
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="MARL-MDS Training and Evaluation")
+    parser.add_argument("--mode", type=str, default="demo", choices=["demo", "evaluate"], help="Mode: demo or evaluate")
+    parser.add_argument("--num_samples", type=int, default=50, help="Number of samples for evaluation")
+    args = parser.parse_args()
+    
+    if args.mode == "evaluate":
+        # Run evaluation
+        evaluate_model(num_samples=args.num_samples)
+    else:
+        # Run demo
+        docs = [
+            "Apple Inc. is an American multinational technology company headquartered in Cupertino, California. It is the world's largest technology company by revenue.",
+            "Steve Jobs and Steve Wozniak founded Apple in 1976. The company is famous for the iPhone and Mac computers.",
+            "Recent reports suggest Apple is investing heavily in artificial intelligence and autonomous vehicles to expand its product line.",
+        ]
+
+        # Use trained checkpoint by default
+        checkpoint_path = os.path.join(project_root, "checkpoints", "marl_mds_multinews.pt")
+        
+        trainer = MARLMdsTrainer(checkpoint_path=checkpoint_path)
+        
+        # Run inference without reference summary
+        loss, metrics = trainer.run_episode(docs)
+        print("--- MARL Inference with Trained Model ---")
+        print("Summary:", metrics["summary"])
+        print(f"Selected {len(metrics['selected_sentences'])} sentences")

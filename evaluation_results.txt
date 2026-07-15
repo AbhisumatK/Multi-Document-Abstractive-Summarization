@@ -1,0 +1,12 @@
+=== MARL-MDS Model Evaluation Results ===
+Checkpoint: C:\Users\ABHISUMAT\All Projects\Extractive-Summarisation\checkpoints\marl_mds_multinews_20260712_102629.pt
+Dataset: Multi-News test set
+Samples evaluated: 47
+Evaluation time: 397.06 seconds
+
+ROUGE Scores:
+ROUGE-1: 0.3279
+ROUGE-2: 0.1035
+ROUGE-L: 0.1714
+
+Generated: 2026-07-14 23:34:44

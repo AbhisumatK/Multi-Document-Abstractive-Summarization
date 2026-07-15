@@ -1191,6 +1191,37 @@ python master_demo.py
 - Console output showing selected sentences
 - Works without trained checkpoint (uses heuristics)
 
+### Step 7: Evaluate Model (ROUGE Scores)
+
+```bash
+# Activate environment
+conda activate GPU-pytorch
+
+# Run evaluation on Multi-News test set
+python marl_trainer.py --mode evaluate --num_samples 50
+```
+
+**Expected Output:**
+- Evaluation on Multi-News test set (default 50 samples)
+- ROUGE-1, ROUGE-2, and ROUGE-L scores
+- Results saved to `evaluation_results.txt`
+
+**Evaluation Details:**
+- Uses the latest trained checkpoint from `checkpoints/` directory
+- Loads Multi-News test set via TensorFlow Datasets
+- Generates summaries using the trained model
+- Computes ROUGE scores against reference summaries
+- Saves results with timestamp and checkpoint information
+
+**Adjust sample count:**
+```bash
+# Evaluate on 100 samples
+python marl_trainer.py --mode evaluate --num_samples 100
+
+# Evaluate on 20 samples (faster)
+python marl_trainer.py --mode evaluate --num_samples 20
+```
+
 ## Technical Details for Report Writing
 
 ### Agent 1: Hamilton Packing Agent
@@ -1389,15 +1420,17 @@ do_sample=False  # Deterministic
 
 ### Quality Metrics
 
-**ROUGE Scores** (trained model):
-- ROUGE-1: ~0.35-0.40
-- ROUGE-2: ~0.15-0.20
-- ROUGE-L: ~0.30-0.35
+**Training Metrics**:
+- Trained on 500 samples from Multi-News dataset over 5 epochs
+- Checkpoint size: ~3.19GB
+- Training time: 2-4 hours on GPU
 
 **Faithfulness**:
 - No hallucinated facts (post-processed)
 - No false attributions (verified)
 - Grounded in source documents
+
+**Note**: Specific ROUGE scores were not computed on a held-out test set. The reward function during training uses ROUGE and BERTScore components for optimization, but formal evaluation metrics on a test set were not conducted.
 
 ## Conclusion
 
